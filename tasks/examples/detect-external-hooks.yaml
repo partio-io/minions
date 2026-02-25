@@ -1,0 +1,38 @@
+id: detect-external-hooks
+title: "Detect external hook managers during enable"
+source: "entireio/cli#373 (changelog 0.4.5)"
+source_type: changelog
+description: |
+  During `partio enable`, detect if external Git hook managers (Husky, Lefthook,
+  Overcommit) are already installed in the repository. If detected, warn the user
+  about potential conflicts with Partio's own hook installation.
+
+  Detection should check for:
+  - Husky: `.husky/` directory or `prepare` script in package.json
+  - Lefthook: `lefthook.yml` or `.lefthook.yml` in repo root
+  - Overcommit: `.overcommit.yml` in repo root
+
+  The warning should be informational (not blocking) — Partio should still install
+  its hooks but let the user know about the potential conflict. The warning should
+  suggest running `partio doctor` for more details.
+
+  Follow the existing patterns in `cmd/partio/enable.go` and the hook installation
+  code in `internal/git/hooks/`.
+target_repos:
+  - cli
+  - docs
+context_hints:
+  - "cli/cmd/partio/enable.go"
+  - "cli/internal/git/hooks/"
+  - "docs/cli/commands.mdx"
+acceptance_criteria:
+  - "partio enable warns when Husky .husky/ directory is detected"
+  - "partio enable warns when lefthook.yml is detected"
+  - "partio enable warns when .overcommit.yml is detected"
+  - "Warning is informational, does not block hook installation"
+  - "make test passes in cli/"
+  - "make lint passes in cli/"
+  - "docs/cli/commands.mdx updated with hook conflict info if applicable"
+pr_labels:
+  - "minion"
+  - "feature"

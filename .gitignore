@@ -1,0 +1,17 @@
+# Compiled binary
+minions
+
+# Minion worktrees (created during execution)
+.minion-worktrees/
+
+# Generated prompts (dry-run output)
+*.generated-prompt.md
+
+# OS files
+.DS_Store
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*~

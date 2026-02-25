@@ -1,0 +1,40 @@
+# Task Spec Template
+#
+# Each task is a self-contained YAML file that defines work for a minion.
+# Place completed specs in tasks/ with a kebab-case filename matching the id.
+#
+# Required fields: id, title, source, source_type, description, target_repos, acceptance_criteria
+# Optional fields: context_hints, pr_labels, depends_on
+
+id: example-task-id                      # Unique kebab-case identifier
+title: "Short human-readable title"      # Displayed in PR titles
+source: "entireio/cli#123 (changelog)"   # Where this task originated
+source_type: changelog                   # changelog | blog | issue | manual
+
+description: |
+  Multi-line description of what the minion should implement.
+  Be specific about the desired behavior and approach.
+  Reference Partio conventions and architecture where relevant.
+
+target_repos:                            # Which repos to modify (checked out side-by-side)
+  - cli                                  # partio-io/cli (Go)
+  - docs                                 # partio-io/docs (Mintlify)
+  # - app                                # partio-io/app (Next.js)
+  # - site                               # partio-io/site (Next.js)
+  # - extension                          # partio-io/extension
+
+context_hints:                           # Files to pre-read for the minion (optional)
+  - "cli/internal/git/hooks/"            # Directories or files relative to workspace root
+  - "docs/cli/commands.mdx"
+
+acceptance_criteria:                     # Deterministic checks the minion must pass
+  - "make test passes in cli/"
+  - "make lint passes in cli/"
+  - "docs updated if applicable"
+
+pr_labels:                               # Labels for created PRs (optional)
+  - "minion"
+  - "feature"
+
+# depends_on:                            # Other task IDs that must complete first (optional)
+#   - "other-task-id"
