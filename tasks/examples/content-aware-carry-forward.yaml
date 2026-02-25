@@ -1,0 +1,37 @@
+id: content-aware-carry-forward
+title: "Content-aware session carry-forward across amends"
+source: "entireio/cli#325 (changelog 0.4.0)"
+source_type: changelog
+description: |
+  When a commit is amended (`git commit --amend`), Partio should carry forward
+  the session data from the original commit's checkpoint to the new checkpoint.
+  Currently, an amend creates a brand new checkpoint without linking to the
+  previous session context.
+
+  Implementation approach:
+  1. In the post-commit hook, detect if the current commit is an amend
+     (check if the commit hash changed but the parent is the same)
+  2. If it's an amend, look up the previous checkpoint for the original commit
+  3. Carry forward the session reference from the old checkpoint to the new one
+  4. Store a `carried_from` field in the checkpoint metadata
+
+  This preserves the full reasoning chain even when developers amend commits
+  to fix linting or make small adjustments.
+
+  Follow the existing checkpoint creation patterns in `internal/checkpoint/`
+  and the hook flow in `internal/hooks/`.
+target_repos:
+  - cli
+context_hints:
+  - "cli/internal/hooks/post_commit.go"
+  - "cli/internal/checkpoint/"
+  - "cli/internal/session/"
+acceptance_criteria:
+  - "Amending a commit carries forward the session from the original checkpoint"
+  - "Checkpoint metadata includes carried_from when applicable"
+  - "Non-amend commits are unaffected"
+  - "make test passes in cli/"
+  - "make lint passes in cli/"
+pr_labels:
+  - "minion"
+  - "feature"

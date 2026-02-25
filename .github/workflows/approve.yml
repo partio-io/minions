@@ -1,0 +1,65 @@
+name: Auto-Approve Proposals
+
+on:
+  schedule:
+    - cron: "0 9,21 * * *"  # 1 hour after propose (09:00, 21:00 UTC)
+
+  workflow_dispatch:
+    inputs:
+      delay:
+        description: "Minimum age before approval (e.g., 24h, 0h)"
+        required: false
+        default: "24h"
+        type: string
+      dry_run:
+        description: "Dry run (no labels added)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  issues: write
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check authorization
+        if: github.event_name != 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+        run: |
+          ROLE=$(gh api "orgs/partio-io/memberships/${{ github.actor }}" --jq '.role' 2>/dev/null || echo "none")
+          if [ "$ROLE" != "admin" ]; then
+            echo "::error::Unauthorized: ${{ github.actor }} (role: ${ROLE}) is not a partio-io org admin"
+            exit 1
+          fi
+          echo "Authorized: ${{ github.actor }} (org role: ${ROLE})"
+
+      - name: Checkout minions
+        uses: actions/checkout@v4
+        with:
+          repository: partio-io/minions
+          path: minions
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Build minions
+        run: cd minions && make build
+
+      - name: Run approve
+        env:
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+        run: |
+          cd minions
+          DELAY="${{ inputs.delay || '24h' }}"
+          ARGS="approve --delay ${DELAY}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="${ARGS} --dry-run"
+          fi
+          ./minions $ARGS

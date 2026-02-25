@@ -1,0 +1,66 @@
+name: Documentation Minion
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_ref:
+        description: "PR reference (e.g., partio-io/cli#42)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run (prompt generation only)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout minions
+        uses: actions/checkout@v4
+        with:
+          repository: partio-io/minions
+          path: minions
+
+      - name: Checkout docs
+        uses: actions/checkout@v4
+        with:
+          repository: partio-io/docs
+          path: docs
+          token: ${{ secrets.PARTIO_PAT }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build minions
+        run: cd minions && make build
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run doc minion
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+          WORKSPACE_ROOT: ${{ github.workspace }}
+        run: |
+          cd minions
+          ARGS="doc --pr ${{ inputs.pr_ref }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="${ARGS} --dry-run"
+          fi
+          ./minions $ARGS
