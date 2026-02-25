@@ -1,0 +1,5 @@
+sources:
+  - name: entireio-cli
+    url: "https://github.com/entireio/cli/blob/main/CHANGELOG.md"
+    type: changelog
+    last_version: ""

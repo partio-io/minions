@@ -15,13 +15,14 @@ Minions is a lightweight system for orchestrating unattended Claude Code agents 
 
 1. **Task specs** (`tasks/*.yaml`) define what to build — target repos, acceptance criteria, context hints
 2. **Ingestor** (`minions ingest`) generates task specs from external sources (changelogs, blogs, issues)
-3. **Orchestrator** (`minions run`) executes tasks: worktree → prompt → `claude -p` → lint/test → PR
-4. **Doc minion** (`minions doc`) generates documentation PRs for existing PRs
+3. **Proposer** (`minions propose`) daily changelog monitoring → proposal issues with embedded task YAML
+4. **Orchestrator** (`minions run`) executes tasks: worktree → prompt → `claude -p` → lint/test → PR
+5. **Doc minion** (`minions doc`) generates documentation PRs for existing PRs
 
 ## File Structure
 
 ```
-cmd/minions/              CLI commands (run, ingest, doc, version)
+cmd/minions/              CLI commands (run, ingest, propose, doc, version)
 internal/
   task/                   Task struct, YAML loading, validation
   prompt/
@@ -34,9 +35,11 @@ internal/
   claude/                 claude -p headless execution wrapper
   pr/                     PR creation + cross-linking
   ingest/                 Source ingestion (changelog, blog, issues, task generation)
+  propose/                Proposal pipeline (sources, version detection, issue creation)
   git/                    Git command helpers
   config/                 Env-based configuration
   log/                    slog setup
+sources.yaml              Monitored changelog sources + last-processed version state
 tasks/
   examples/               Example task specs
 templates/
@@ -101,6 +104,15 @@ minions ingest blog <url>
 
 # Ingest from GitHub issues
 minions ingest issues <repo> [--label <label>]
+
+# Propose features from monitored changelogs
+minions propose
+
+# Propose dry run (show what issues would be created)
+minions propose --dry-run
+
+# Propose from a specific source only
+minions propose --source entireio-cli
 
 # Generate doc PR for an existing PR
 minions doc --pr <repo>#<number>

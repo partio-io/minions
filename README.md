@@ -27,6 +27,9 @@ export GH_TOKEN="ghp_..."
 ```
 Source Ingestor  →  Task Specs (YAML)  →  Orchestrator  →  Minions  →  PRs
 (minions ingest)                         (minions run)    (worktrees)  (gh pr create)
+
+Changelog Monitor  →  Proposal Issues  →  Human Review  →  /minion build  →  Execution
+(minions propose)     (GitHub Issues)     (discuss/approve)  (label/comment)   (minions run)
 ```
 
 Each minion:
@@ -59,6 +62,18 @@ minions ingest blog <url>                   # Extract ideas from blog posts
 minions ingest issues <repo> [--label lbl]  # Convert labeled issues to tasks
 ```
 
+### Propose Features (`minions propose`)
+
+Monitor changelogs for new releases and create proposal issues:
+
+```bash
+minions propose                        # Check all sources, create issues
+minions propose --dry-run              # Preview without creating issues
+minions propose --source entireio-cli  # Check a specific source only
+```
+
+Proposal issues include embedded task YAML. Comment `/minion build` or add the `minion-approved` label to trigger execution.
+
 ### Doc Minion (`minions doc`)
 
 Generate documentation PRs for existing code PRs:
@@ -72,7 +87,8 @@ minions doc --pr partio-io/app#15 --dry-run
 
 Two workflows for CI/CD execution:
 
-- **`minion.yml`** — Full minion pipeline (manual trigger or issue label)
+- **`minion.yml`** — Full minion pipeline (manual trigger, issue label, or `/minion build` comment)
+- **`propose.yml`** — Daily changelog monitoring + proposal issue creation
 - **`doc-minion.yml`** — Documentation updates (manual trigger)
 
 ## Requirements

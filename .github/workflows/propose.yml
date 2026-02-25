@@ -1,0 +1,73 @@
+name: Propose Features
+
+on:
+  schedule:
+    - cron: "0 8 * * *"  # Daily at 08:00 UTC
+
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Process only this source (leave empty for all)"
+        required: false
+        type: string
+      dry_run:
+        description: "Dry run (no issues created)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout minions
+        uses: actions/checkout@v4
+        with:
+          repository: partio-io/minions
+          path: minions
+          token: ${{ secrets.PARTIO_PAT }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Build minions
+        run: cd minions && make build
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run propose
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+          WORKSPACE_ROOT: ${{ github.workspace }}
+        run: |
+          cd minions
+          ARGS="propose"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="${ARGS} --dry-run"
+          fi
+          if [ -n "${{ inputs.source }}" ]; then
+            ARGS="${ARGS} --source ${{ inputs.source }}"
+          fi
+          ./minions $ARGS
+
+      # Commit updated sources.yaml (last_version changes)
+      - name: Commit sources.yaml
+        if: inputs.dry_run != 'true'
+        run: |
+          cd minions
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sources.yaml
+          git diff --cached --quiet || git commit -m "chore: update sources.yaml last_version" && git push
+        env:
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}

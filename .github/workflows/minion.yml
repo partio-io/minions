@@ -18,21 +18,26 @@ on:
         default: false
         type: boolean
 
-  # Auto-trigger on issues labeled 'minion-ready'
+  # Auto-trigger on issues labeled 'minion-ready' or 'minion-approved'
   issues:
     types: [labeled]
+
+  # Trigger on /minion build comment
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
   pull-requests: write
-  issues: read
+  issues: write
 
 jobs:
   run-minion:
-    # Skip issue trigger unless the label is 'minion-ready'
+    # Skip unless: workflow_dispatch, minion-ready/minion-approved label, or /minion build comment
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'issues' && github.event.label.name == 'minion-ready')
+      (github.event_name == 'issues' && (github.event.label.name == 'minion-ready' || github.event.label.name == 'minion-approved')) ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/minion build'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -104,17 +109,51 @@ jobs:
             echo "task_file=${{ inputs.task_file }}" >> "$GITHUB_OUTPUT"
             echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
             echo "parallel=${{ inputs.parallel }}" >> "$GITHUB_OUTPUT"
+
+          elif [ "${{ github.event_name }}" = "issue_comment" ]; then
+            # /minion build comment: extract embedded task YAML from issue body
+            ISSUE_NUM="${{ github.event.issue.number }}"
+            ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --repo "${{ github.repository }}" --json body -q '.body')
+
+            # Extract YAML between <!-- minion-task and minion-task --> markers
+            TASK_YAML=$(echo "$ISSUE_BODY" | sed -n '/<!-- minion-task/,/minion-task -->/p' | sed '1d;$d')
+
+            if [ -z "$TASK_YAML" ]; then
+              echo "::error::No embedded minion-task YAML found in issue #${ISSUE_NUM}"
+              exit 1
+            fi
+
+            TASK_FILE="minions/tasks/_proposal-${ISSUE_NUM}.yaml"
+            echo "$TASK_YAML" > "$TASK_FILE"
+
+            echo "task_file=${TASK_FILE}" >> "$GITHUB_OUTPUT"
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+            echo "parallel=1" >> "$GITHUB_OUTPUT"
+
+            # Post acknowledgment comment
+            RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            gh issue comment "$ISSUE_NUM" --repo "${{ github.repository }}" \
+              --body "Minion build triggered. [View workflow run](${RUN_URL})"
+
           else
-            # Issue trigger: generate task from issue
+            # Issue label trigger (minion-ready or minion-approved)
             ISSUE_NUM="${{ github.event.issue.number }}"
             ISSUE_TITLE="${{ github.event.issue.title }}"
             ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --repo "${{ github.repository }}" --json body -q '.body')
 
-            # Create task file from issue
-            TASK_ID=$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 60)
-            TASK_FILE="minions/tasks/${TASK_ID}.yaml"
+            # Check for embedded task YAML (from minion-proposal issues)
+            TASK_YAML=$(echo "$ISSUE_BODY" | sed -n '/<!-- minion-task/,/minion-task -->/p' | sed '1d;$d')
 
-            cat > "$TASK_FILE" <<YAML
+            if [ -n "$TASK_YAML" ]; then
+              # Use embedded YAML directly
+              TASK_FILE="minions/tasks/_proposal-${ISSUE_NUM}.yaml"
+              echo "$TASK_YAML" > "$TASK_FILE"
+            else
+              # Fallback: generate task from issue title/body
+              TASK_ID=$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 60)
+              TASK_FILE="minions/tasks/${TASK_ID}.yaml"
+
+              cat > "$TASK_FILE" <<YAML
           id: ${TASK_ID}
           title: "${ISSUE_TITLE}"
           source: "${{ github.repository }}#${ISSUE_NUM}"
@@ -128,6 +167,7 @@ jobs:
           pr_labels:
             - "minion"
           YAML
+            fi
 
             echo "task_file=${TASK_FILE}" >> "$GITHUB_OUTPUT"
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
