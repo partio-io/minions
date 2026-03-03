@@ -15,14 +15,15 @@ Minions is a lightweight system for orchestrating unattended Claude Code agents 
 
 1. **Task specs** (`tasks/*.yaml`) define what to build — target repos, acceptance criteria, context hints
 2. **Ingestor** (`minions ingest`) generates task specs from external sources (changelogs, blogs, issues)
-3. **Proposer** (`minions propose`) daily changelog monitoring → proposal issues with embedded task YAML
-4. **Orchestrator** (`minions run`) executes tasks: worktree → prompt → `claude -p` → lint/test → PR
-5. **Doc minion** (`minions doc`) generates documentation PRs for existing PRs
+3. **Proposer** (`minions propose`) twice-daily changelog monitoring → proposal issues with embedded task YAML
+4. **Approver** (`minions approve`) auto-approves proposals after 24h review window (no `do-not-build` veto)
+5. **Orchestrator** (`minions run`) executes tasks: worktree → prompt → `claude -p` → lint/test → PR
+6. **Doc minion** (`minions doc`) generates documentation PRs for existing PRs
 
 ## File Structure
 
 ```
-cmd/minions/              CLI commands (run, ingest, propose, doc, version)
+cmd/minions/              CLI commands (run, ingest, propose, approve, doc, version)
 internal/
   task/                   Task struct, YAML loading, validation
   prompt/
@@ -36,6 +37,7 @@ internal/
   pr/                     PR creation + cross-linking
   ingest/                 Source ingestion (changelog, blog, issues, task generation)
   propose/                Proposal pipeline (sources, version detection, issue creation)
+  approve/                Auto-approval of proposals after review window
   git/                    Git command helpers
   config/                 Env-based configuration
   log/                    slog setup
@@ -80,6 +82,8 @@ The workspace root is always one directory up from `minions/`.
 - **CLAUDE.md as context** — each repo's CLAUDE.md is automatically included in minion prompts
 - **`claude -p` headless mode** — one-shot execution, no interactive prompts
 - **Deterministic checks sandwich agent work** — lint/test before PR, retry once on failure
+- **Label-based state machine** — issue labels track proposal lifecycle (no database needed)
+- **PARTIO_PAT for label chaining** — `approve.yml` uses PAT so adding `minion-approved` triggers `minion.yml`
 
 ## Commands
 
@@ -114,6 +118,15 @@ minions propose --dry-run
 # Propose from a specific source only
 minions propose --source entireio-cli
 
+# Auto-approve proposals past the review window
+minions approve
+
+# Approve with custom delay (e.g., immediately)
+minions approve --delay 0h
+
+# Approve dry run (show what would be approved)
+minions approve --dry-run
+
 # Generate doc PR for an existing PR
 minions doc --pr <repo>#<number>
 
@@ -131,6 +144,21 @@ minions version
 | `MINION_MAX_TURNS` | No | Max Claude turns (default: 30) |
 | `MINION_DRY_RUN` | No | Set to `1` to skip execution |
 | `MINION_LOG_LEVEL` | No | Log level (debug, info, warn, error) |
+
+## Proposal Label State Machine
+
+Issues progress through states tracked by GitHub labels:
+
+| State | Labels | Meaning |
+|-------|--------|---------|
+| Proposed | `minion-proposal` | Awaiting review |
+| Vetoed | `+ do-not-build` | Human blocked it |
+| Approved | `+ minion-approved` | Ready for execution |
+| Executing | `+ minion-executing` | Currently running |
+| Done | `+ minion-done` (closed) | PRs created |
+| Failed | `+ minion-failed` | Needs human attention |
+
+**Manual interventions:** Add `do-not-build` to veto, comment `/minion build` to fast-track, trigger `approve.yml` with `delay: 0h` to approve all now.
 
 ## Conventions
 

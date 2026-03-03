@@ -2,7 +2,7 @@ name: Propose Features
 
 on:
   schedule:
-    - cron: "0 8 * * *"  # Daily at 08:00 UTC
+    - cron: "0 8,20 * * *"  # Twice daily at 08:00 and 20:00 UTC
 
   workflow_dispatch:
     inputs:

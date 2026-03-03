@@ -28,8 +28,11 @@ export GH_TOKEN="ghp_..."
 Source Ingestor  →  Task Specs (YAML)  →  Orchestrator  →  Minions  →  PRs
 (minions ingest)                         (minions run)    (worktrees)  (gh pr create)
 
-Changelog Monitor  →  Proposal Issues  →  Human Review  →  /minion build  →  Execution
-(minions propose)     (GitHub Issues)     (discuss/approve)  (label/comment)   (minions run)
+Changelog Monitor  →  Proposal Issues  →  Auto-Approve (24h)  →  Execution  →  Done/Failed
+(minions propose)     (minion-proposal)   (minions approve)      (minions run)  (labels + close)
+         ↑ cron 08:00,20:00 UTC            ↑ cron 09:00,21:00 UTC
+                                            Human can veto with 'do-not-build' label
+                                            Human can fast-track with '/minion build' comment
 ```
 
 Each minion:
@@ -72,7 +75,17 @@ minions propose --dry-run              # Preview without creating issues
 minions propose --source entireio-cli  # Check a specific source only
 ```
 
-Proposal issues include embedded task YAML. Comment `/minion build` or add the `minion-approved` label to trigger execution.
+Proposal issues include embedded task YAML. They are auto-approved after 24h if no one adds the `do-not-build` label. Comment `/minion build` to fast-track.
+
+### Approve Proposals (`minions approve`)
+
+Auto-approve proposals that have passed the review window:
+
+```bash
+minions approve                    # Approve proposals older than 24h
+minions approve --delay 0h         # Approve all eligible now
+minions approve --dry-run           # Preview without making changes
+```
 
 ### Doc Minion (`minions doc`)
 
@@ -85,10 +98,11 @@ minions doc --pr partio-io/app#15 --dry-run
 
 ## GitHub Actions
 
-Two workflows for CI/CD execution:
+Four workflows for CI/CD execution:
 
 - **`minion.yml`** — Full minion pipeline (manual trigger, issue label, or `/minion build` comment)
-- **`propose.yml`** — Daily changelog monitoring + proposal issue creation
+- **`propose.yml`** — Twice-daily changelog monitoring + proposal issue creation (08:00, 20:00 UTC)
+- **`approve.yml`** — Auto-approve proposals after 24h review window (09:00, 21:00 UTC)
 - **`doc-minion.yml`** — Documentation updates (manual trigger)
 
 ## Requirements
