@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/partio-io/minions/internal/claude"
 	"github.com/partio-io/minions/internal/prompt"
 
 	"gopkg.in/yaml.v3"
@@ -48,10 +49,15 @@ func GenerateTasks(sourceType, sourceURL, content, outputDir string) (int, error
 		return 0, fmt.Errorf("claude failed to extract features: %w", err)
 	}
 
+	resultStr, err := claude.ExtractResult(out)
+	if err != nil {
+		return 0, fmt.Errorf("parsing claude output: %w", err)
+	}
+
 	// Parse JSON array
 	var features []Feature
-	if err := json.Unmarshal(out, &features); err != nil {
-		return 0, fmt.Errorf("parsing Claude output as JSON: %w\nOutput: %s", err, string(out))
+	if err := json.Unmarshal([]byte(resultStr), &features); err != nil {
+		return 0, fmt.Errorf("parsing features JSON: %w\nOutput: %s", err, resultStr)
 	}
 
 	if len(features) == 0 {

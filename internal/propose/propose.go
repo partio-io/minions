@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/partio-io/minions/internal/claude"
 	"github.com/partio-io/minions/internal/ingest"
 	"github.com/partio-io/minions/internal/prompt"
 )
@@ -60,9 +61,14 @@ func ExtractFeatures(sourceType, sourceURL, content string) ([]ingest.Feature, e
 		return nil, fmt.Errorf("claude failed to extract features: %w", err)
 	}
 
+	resultStr, err := claude.ExtractResult(out)
+	if err != nil {
+		return nil, fmt.Errorf("parsing claude output: %w", err)
+	}
+
 	var features []ingest.Feature
-	if err := json.Unmarshal(out, &features); err != nil {
-		return nil, fmt.Errorf("parsing Claude output as JSON: %w\nOutput: %s", err, string(out))
+	if err := json.Unmarshal([]byte(resultStr), &features); err != nil {
+		return nil, fmt.Errorf("parsing features JSON: %w\nOutput: %s", err, resultStr)
 	}
 
 	return features, nil

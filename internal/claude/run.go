@@ -1,11 +1,13 @@
 package claude
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 )
 
 // Opts configures a headless Claude Code invocation.
@@ -38,4 +40,35 @@ func Run(opts Opts) error {
 		return fmt.Errorf("claude exited with error: %w", err)
 	}
 	return nil
+}
+
+// claudeResult represents the JSON envelope from `claude -p --output-format json`.
+type claudeResult struct {
+	Result  string `json:"result"`
+	IsError bool   `json:"is_error"`
+}
+
+// ExtractResult unwraps the JSON envelope from `claude -p --output-format json`
+// and returns the inner result string with markdown code fences stripped.
+func ExtractResult(raw []byte) (string, error) {
+	var cr claudeResult
+	if err := json.Unmarshal(raw, &cr); err != nil {
+		return "", fmt.Errorf("parsing claude JSON envelope: %w", err)
+	}
+	if cr.IsError {
+		return "", fmt.Errorf("claude returned error: %s", cr.Result)
+	}
+	return stripCodeFences(cr.Result), nil
+}
+
+// stripCodeFences removes ```json ... ``` wrapping if present.
+func stripCodeFences(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		if i := strings.Index(s, "\n"); i != -1 {
+			s = s[i+1:]
+		}
+		s = strings.TrimSuffix(s, "```")
+	}
+	return strings.TrimSpace(s)
 }
