@@ -1,5 +1,5 @@
 # Compiled binary
-minions
+/minions
 
 # Minion worktrees (created during execution)
 .minion-worktrees/
