@@ -2,4 +2,4 @@ sources:
     - name: entireio-cli
       url: https://github.com/entireio/cli/blob/main/CHANGELOG.md
       type: changelog
-      last_version: 0.4.9
+      last_version: ""
