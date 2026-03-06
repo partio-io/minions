@@ -5,12 +5,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
 
 	"github.com/partio-io/minions/internal/checks"
 	"github.com/partio-io/minions/internal/claude"
+	"github.com/partio-io/minions/internal/git"
 	"github.com/partio-io/minions/internal/pr"
 	"github.com/partio-io/minions/internal/prompt"
 	"github.com/partio-io/minions/internal/task"
@@ -159,15 +161,45 @@ func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
 		return fmt.Errorf("no worktrees created")
 	}
 
+	// Create virtual workspace directory with symlinks to worktrees
+	virtualWS, err := os.MkdirTemp("", "minion-workspace-*")
+	if err != nil {
+		return fmt.Errorf("creating virtual workspace: %w", err)
+	}
+	defer os.RemoveAll(virtualWS)
+
+	for i, repo := range t.TargetRepos {
+		if i < len(worktreePaths) {
+			if err := os.Symlink(worktreePaths[i], filepath.Join(virtualWS, repo)); err != nil {
+				return fmt.Errorf("creating symlink for %s: %w", repo, err)
+			}
+		}
+	}
+
 	// Run Claude Code
 	fmt.Println("--- Running Claude Code ---")
 	err = claude.Run(claude.Opts{
 		Prompt:   taskPrompt,
-		CWD:      worktreePaths[0],
+		CWD:      virtualWS,
 		MaxTurns: cfg.MaxTurns,
 	})
 	if err != nil {
 		slog.Warn("claude exited with error", "error", err)
+	}
+
+	// Check for changes before running checks
+	hasChanges := false
+	for _, wtPath := range worktreePaths {
+		status, _ := git.ExecGitDir(wtPath, "status", "--porcelain")
+		if strings.TrimSpace(status) != "" {
+			hasChanges = true
+			break
+		}
+	}
+	if !hasChanges {
+		slog.Warn("claude produced no changes in any repo")
+		cleanupWorktrees(t.TargetRepos, t.ID, workspaceRoot)
+		return fmt.Errorf("no changes produced for task %s", t.ID)
 	}
 
 	// Run checks
@@ -193,7 +225,7 @@ Fix the errors and ensure all checks pass. Do not introduce new changes beyond w
 
 		_ = claude.Run(claude.Opts{
 			Prompt:   retryPrompt,
-			CWD:      worktreePaths[0],
+			CWD:      virtualWS,
 			MaxTurns: 15,
 		})
 
