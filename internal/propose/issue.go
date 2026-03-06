@@ -31,7 +31,7 @@ func IssueExists(repo, featureID string) (bool, error) {
 
 // CreateProposalIssue creates a GitHub issue with the minion-proposal label.
 func CreateProposalIssue(repo string, f ingest.Feature, sourceName string) (string, error) {
-	title := fmt.Sprintf("[minion-proposal] %s", f.Title)
+	title := fmt.Sprintf("[minion-proposal][%s] %s", f.ID, f.Title)
 	body := FormatIssueBody(f, sourceName)
 
 	out, err := exec.Command("gh", "issue", "create",
