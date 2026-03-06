@@ -11,13 +11,12 @@ import (
 )
 
 // IssueExists checks if a proposal issue for the given featureID already exists.
-// It searches for issues with the minion-proposal label whose title contains the feature ID.
+// It searches for issues with the minion-proposal label whose body contains the feature ID.
 func IssueExists(repo, featureID string) (bool, error) {
-	searchQuery := fmt.Sprintf("[minion-proposal] %s", featureID)
 	cmd := exec.Command("gh", "issue", "list",
 		"--repo", repo,
 		"--label", "minion-proposal",
-		"--search", searchQuery,
+		"--search", featureID,
 		"--json", "number",
 		"--limit", "1",
 	)
@@ -32,7 +31,7 @@ func IssueExists(repo, featureID string) (bool, error) {
 
 // CreateProposalIssue creates a GitHub issue with the minion-proposal label.
 func CreateProposalIssue(repo string, f ingest.Feature, sourceName string) (string, error) {
-	title := fmt.Sprintf("[minion-proposal][%s] %s", f.ID, f.Title)
+	title := f.Title
 	body := FormatIssueBody(f, sourceName)
 
 	cmd := exec.Command("gh", "issue", "create",

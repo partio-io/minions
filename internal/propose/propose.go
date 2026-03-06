@@ -137,7 +137,7 @@ func ProcessSource(src Source, repo string, dryRun bool) (string, error) {
 		}
 
 		if dryRun {
-			fmt.Printf("[dry-run] Would create issue: [minion-proposal][%s] %s\n", f.ID, f.Title)
+			fmt.Printf("[dry-run] Would create issue: %s\n", f.Title)
 			fmt.Printf("  Feature ID: %s\n", f.ID)
 			fmt.Printf("  Target repos: %s\n", strings.Join(f.TargetRepos, ", "))
 			fmt.Println()
