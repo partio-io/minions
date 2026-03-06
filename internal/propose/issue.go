@@ -14,15 +14,16 @@ import (
 // It searches for issues with the minion-proposal label whose title contains the feature ID.
 func IssueExists(repo, featureID string) (bool, error) {
 	searchQuery := fmt.Sprintf("[minion-proposal] %s", featureID)
-	out, err := exec.Command("gh", "issue", "list",
+	cmd := exec.Command("gh", "issue", "list",
 		"--repo", repo,
 		"--label", "minion-proposal",
 		"--search", searchQuery,
 		"--json", "number",
 		"--limit", "1",
-	).Output()
+	)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return false, fmt.Errorf("searching issues: %w", err)
+		return false, fmt.Errorf("searching issues: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
 	// Empty JSON array means no matches
@@ -34,14 +35,15 @@ func CreateProposalIssue(repo string, f ingest.Feature, sourceName string) (stri
 	title := fmt.Sprintf("[minion-proposal][%s] %s", f.ID, f.Title)
 	body := FormatIssueBody(f, sourceName)
 
-	out, err := exec.Command("gh", "issue", "create",
+	cmd := exec.Command("gh", "issue", "create",
 		"--repo", repo,
 		"--title", title,
 		"--label", "minion-proposal",
 		"--body", body,
-	).Output()
+	)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("creating issue: %w", err)
+		return "", fmt.Errorf("creating issue: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
 	return strings.TrimSpace(string(out)), nil
