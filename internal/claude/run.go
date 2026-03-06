@@ -30,6 +30,7 @@ func Run(opts Opts) error {
 		"--allowedTools", "Edit,Write,Read,Glob,Grep,Bash",
 		"--max-turns", strconv.Itoa(opts.MaxTurns),
 		"--output-format", "stream-json",
+		"--verbose",
 	}
 
 	slog.Info("running claude", "cwd", opts.CWD, "max_turns", opts.MaxTurns)
