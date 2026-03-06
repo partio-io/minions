@@ -210,6 +210,7 @@ jobs:
           GH_TOKEN: ${{ secrets.PARTIO_PAT }}
           WORKSPACE_ROOT: ${{ github.workspace }}
           MINION_PR_URLS_FILE: ${{ github.workspace }}/minion-pr-urls.txt
+          MINION_DEBUG_DIR: ${{ github.workspace }}/minion-debug
         run: |
           cd minions
           ARGS="run ${{ steps.task.outputs.task_file }}"
@@ -218,6 +219,15 @@ jobs:
           fi
           ARGS="${ARGS} --parallel ${{ steps.task.outputs.parallel }}"
           ./minions $ARGS
+
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minion-debug-${{ github.run_id }}
+          path: ${{ github.workspace }}/minion-debug/
+          if-no-files-found: ignore
+          retention-days: 7
 
       # On success: mark done and close issue
       - name: Mark done

@@ -3,6 +3,7 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ type Opts struct {
 	Prompt   string
 	CWD      string
 	MaxTurns int
+	LogFile  string // If set, tee stdout to this file for debug observability
 }
 
 // Run executes `claude -p` in headless mode with the given options.
@@ -27,14 +29,26 @@ func Run(opts Opts) error {
 		"-p", opts.Prompt,
 		"--allowedTools", "Edit,Write,Read,Glob,Grep,Bash",
 		"--max-turns", strconv.Itoa(opts.MaxTurns),
+		"--output-format", "stream-json",
 	}
 
 	slog.Info("running claude", "cwd", opts.CWD, "max_turns", opts.MaxTurns)
 
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = opts.CWD
-	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	stdout := io.Writer(os.Stdout)
+	if opts.LogFile != "" {
+		f, err := os.Create(opts.LogFile)
+		if err != nil {
+			slog.Warn("failed to create claude log file, continuing without it", "path", opts.LogFile, "error", err)
+		} else {
+			defer f.Close()
+			stdout = io.MultiWriter(os.Stdout, f)
+		}
+	}
+	cmd.Stdout = stdout
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("claude exited with error: %w", err)

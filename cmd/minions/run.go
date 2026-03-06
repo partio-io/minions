@@ -117,6 +117,13 @@ func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
 		return fmt.Errorf("building prompt: %w", err)
 	}
 
+	debugDir := debugDirForTask(t.ID)
+	if debugDir != "" {
+		if err := os.WriteFile(filepath.Join(debugDir, "prompt.md"), []byte(taskPrompt), 0644); err != nil {
+			slog.Warn("failed to save debug prompt", "error", err)
+		}
+	}
+
 	if dryRun {
 		fmt.Println()
 		fmt.Println("=== DRY RUN: Generated Prompt ===")
@@ -143,6 +150,7 @@ func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
 	// Create worktrees
 	fmt.Println("--- Creating worktrees ---")
 	var worktreePaths []string
+	var worktreeRepos []string
 	for _, repo := range t.TargetRepos {
 		repoPath := filepath.Join(workspaceRoot, repo)
 		if _, err := os.Stat(repoPath); os.IsNotExist(err) {
@@ -154,6 +162,7 @@ func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
 			return fmt.Errorf("creating worktree for %s: %w", repo, err)
 		}
 		worktreePaths = append(worktreePaths, wtPath)
+		worktreeRepos = append(worktreeRepos, repo)
 		fmt.Printf("Created worktree: %s\n", wtPath)
 	}
 
@@ -168,20 +177,23 @@ func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
 	}
 	defer os.RemoveAll(virtualWS)
 
-	for i, repo := range t.TargetRepos {
-		if i < len(worktreePaths) {
-			if err := os.Symlink(worktreePaths[i], filepath.Join(virtualWS, repo)); err != nil {
-				return fmt.Errorf("creating symlink for %s: %w", repo, err)
-			}
+	for i, repo := range worktreeRepos {
+		if err := os.Symlink(worktreePaths[i], filepath.Join(virtualWS, repo)); err != nil {
+			return fmt.Errorf("creating symlink for %s: %w", repo, err)
 		}
 	}
 
 	// Run Claude Code
 	fmt.Println("--- Running Claude Code ---")
+	var logFile string
+	if debugDir != "" {
+		logFile = filepath.Join(debugDir, "claude-output.jsonl")
+	}
 	err = claude.Run(claude.Opts{
 		Prompt:   taskPrompt,
 		CWD:      virtualWS,
 		MaxTurns: cfg.MaxTurns,
+		LogFile:  logFile,
 	})
 	if err != nil {
 		slog.Warn("claude exited with error", "error", err)
@@ -189,11 +201,13 @@ func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
 
 	// Check for changes before running checks
 	hasChanges := false
-	for _, wtPath := range worktreePaths {
+	for i, wtPath := range worktreePaths {
 		status, _ := git.ExecGitDir(wtPath, "status", "--porcelain")
 		if strings.TrimSpace(status) != "" {
 			hasChanges = true
-			break
+			slog.Info("worktree has changes", "repo", worktreeRepos[i], "status", strings.TrimSpace(status))
+		} else {
+			slog.Info("worktree has no changes", "repo", worktreeRepos[i])
 		}
 	}
 	if !hasChanges {
@@ -223,10 +237,15 @@ func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
 
 Fix the errors and ensure all checks pass. Do not introduce new changes beyond what's needed to fix the failures.`, failedOutput)
 
+		var retryLogFile string
+		if debugDir != "" {
+			retryLogFile = filepath.Join(debugDir, "claude-retry-output.jsonl")
+		}
 		_ = claude.Run(claude.Opts{
 			Prompt:   retryPrompt,
 			CWD:      virtualWS,
 			MaxTurns: 15,
+			LogFile:  retryLogFile,
 		})
 
 		// Re-run checks
@@ -278,6 +297,16 @@ func cleanupWorktrees(repos []string, taskID, workspaceRoot string) {
 	for _, repo := range repos {
 		worktree.Cleanup(filepath.Join(workspaceRoot, repo), taskID)
 	}
+}
+
+func debugDirForTask(taskID string) string {
+	base := os.Getenv("MINION_DEBUG_DIR")
+	if base == "" {
+		return ""
+	}
+	dir := filepath.Join(base, taskID)
+	os.MkdirAll(dir, 0755)
+	return dir
 }
 
 func runParallel(tasks []*task.Task, workspaceRoot string, dryRun bool, maxParallel int) bool {
