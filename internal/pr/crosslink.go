@@ -48,6 +48,10 @@ func CreateAndLinkAll(taskID, title, workspaceRoot, labelsCSV string, repos []st
 		}
 	}
 
+	if len(prURLs) == 0 && len(repos) > 0 {
+		return nil, fmt.Errorf("no PRs created across %d repos", len(repos))
+	}
+
 	return prURLs, nil
 }
 

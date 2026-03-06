@@ -38,6 +38,14 @@ func Create(repoPath, taskID string) (string, error) {
 		return "", fmt.Errorf("creating worktree: %w", err)
 	}
 
+	// Configure git user in worktree so commits work in CI
+	if _, err := git.ExecGitDir(wtPath, "config", "user.name", "minion[bot]"); err != nil {
+		return "", fmt.Errorf("configuring git user.name: %w", err)
+	}
+	if _, err := git.ExecGitDir(wtPath, "config", "user.email", "minion[bot]@users.noreply.github.com"); err != nil {
+		return "", fmt.Errorf("configuring git user.email: %w", err)
+	}
+
 	return wtPath, nil
 }
 

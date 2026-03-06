@@ -73,19 +73,25 @@ func newRunCmd() *cobra.Command {
 			fmt.Printf("Parallel: %d\n", parallel)
 			fmt.Printf("Dry run: %v\n\n", dryRun)
 
+			var failed bool
 			if parallel <= 1 {
 				for _, t := range tasks {
 					if err := executeTask(t, workspaceRoot, dryRun); err != nil {
 						slog.Error("task failed", "task", t.ID, "error", err)
+						failed = true
 					}
 				}
 			} else {
-				runParallel(tasks, workspaceRoot, dryRun, parallel)
+				failed = runParallel(tasks, workspaceRoot, dryRun, parallel)
 			}
 
 			fmt.Println("==========================================")
 			fmt.Println("All tasks complete.")
 			fmt.Println("==========================================")
+
+			if failed {
+				return fmt.Errorf("one or more tasks failed")
+			}
 			return nil
 		},
 	}
@@ -209,9 +215,14 @@ Fix the errors and ensure all checks pass. Do not introduce new changes beyond w
 
 	// Create PRs
 	fmt.Println("--- Creating PRs ---")
-	_, err = pr.CreateAndLinkAll(t.ID, t.Title, workspaceRoot, labelsCSV, t.TargetRepos)
+	prURLs, err := pr.CreateAndLinkAll(t.ID, t.Title, workspaceRoot, labelsCSV, t.TargetRepos)
 	if err != nil {
-		slog.Error("PR creation failed", "error", err)
+		cleanupWorktrees(t.TargetRepos, t.ID, workspaceRoot)
+		return fmt.Errorf("PR creation failed: %w", err)
+	}
+	if len(prURLs) == 0 {
+		cleanupWorktrees(t.TargetRepos, t.ID, workspaceRoot)
+		return fmt.Errorf("no PRs created for task %s", t.ID)
 	}
 
 	// Cleanup
@@ -228,9 +239,11 @@ func cleanupWorktrees(repos []string, taskID, workspaceRoot string) {
 	}
 }
 
-func runParallel(tasks []*task.Task, workspaceRoot string, dryRun bool, maxParallel int) {
+func runParallel(tasks []*task.Task, workspaceRoot string, dryRun bool, maxParallel int) bool {
 	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var failed bool
 
 	for _, t := range tasks {
 		wg.Add(1)
@@ -242,9 +255,13 @@ func runParallel(tasks []*task.Task, workspaceRoot string, dryRun bool, maxParal
 
 			if err := executeTask(t, workspaceRoot, dryRun); err != nil {
 				slog.Error("task failed", "task", t.ID, "error", err)
+				mu.Lock()
+				failed = true
+				mu.Unlock()
 			}
 		}(t)
 	}
 
 	wg.Wait()
+	return failed
 }
