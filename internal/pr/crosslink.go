@@ -68,6 +68,12 @@ Automated documentation update for %s#%s.
 
 *This PR was created by the doc-minion. Please review carefully.*`, prRepo, prNumber, prRepo, prNumber)
 
+	// Ensure labels exist in target repo (ignore errors for already-existing labels)
+	for _, l := range []string{"minion", "documentation"} {
+		create := exec.Command("gh", "label", "create", l, "--repo", "partio-io/docs")
+		_ = create.Run()
+	}
+
 	args := []string{
 		"pr", "create",
 		"--repo", "partio-io/docs",
