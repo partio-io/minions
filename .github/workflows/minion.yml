@@ -145,10 +145,9 @@ jobs:
               exit 1
             fi
 
-            TASK_FILE="minions/tasks/_proposal-${ISSUE_NUM}.yaml"
-            echo "$TASK_YAML" > "$TASK_FILE"
+            echo "$TASK_YAML" > "minions/tasks/_proposal-${ISSUE_NUM}.yaml"
 
-            echo "task_file=${TASK_FILE}" >> "$GITHUB_OUTPUT"
+            echo "task_file=tasks/_proposal-${ISSUE_NUM}.yaml" >> "$GITHUB_OUTPUT"
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
             echo "parallel=1" >> "$GITHUB_OUTPUT"
             echo "issue_num=${ISSUE_NUM}" >> "$GITHUB_OUTPUT"
@@ -169,14 +168,14 @@ jobs:
 
             if [ -n "$TASK_YAML" ]; then
               # Use embedded YAML directly
-              TASK_FILE="minions/tasks/_proposal-${ISSUE_NUM}.yaml"
-              echo "$TASK_YAML" > "$TASK_FILE"
+              echo "$TASK_YAML" > "minions/tasks/_proposal-${ISSUE_NUM}.yaml"
+              TASK_FILE="tasks/_proposal-${ISSUE_NUM}.yaml"
             else
               # Fallback: generate task from issue title/body
               TASK_ID=$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 60)
-              TASK_FILE="minions/tasks/${TASK_ID}.yaml"
+              TASK_FILE="tasks/${TASK_ID}.yaml"
 
-              cat > "$TASK_FILE" <<YAML
+              cat > "minions/${TASK_FILE}" <<YAML
           id: ${TASK_ID}
           title: "${ISSUE_TITLE}"
           source: "${{ github.repository }}#${ISSUE_NUM}"
