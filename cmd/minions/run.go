@@ -225,6 +225,15 @@ Fix the errors and ensure all checks pass. Do not introduce new changes beyond w
 		return fmt.Errorf("no PRs created for task %s", t.ID)
 	}
 
+	if prURLsFile := os.Getenv("MINION_PR_URLS_FILE"); prURLsFile != "" {
+		if f, err := os.OpenFile(prURLsFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			for _, u := range prURLs {
+				fmt.Fprintln(f, u)
+			}
+			f.Close()
+		}
+	}
+
 	// Cleanup
 	fmt.Println("--- Cleaning up worktrees ---")
 	cleanupWorktrees(t.TargetRepos, t.ID, workspaceRoot)

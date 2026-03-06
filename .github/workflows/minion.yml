@@ -206,6 +206,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ secrets.PARTIO_PAT }}
           WORKSPACE_ROOT: ${{ github.workspace }}
+          MINION_PR_URLS_FILE: ${{ github.workspace }}/minion-pr-urls.txt
         run: |
           cd minions
           ARGS="run ${{ steps.task.outputs.task_file }}"
@@ -222,10 +223,18 @@ jobs:
           GH_TOKEN: ${{ secrets.PARTIO_PAT }}
         run: |
           ISSUE_NUM="${{ steps.task.outputs.issue_num }}"
+          COMMENT="Minion completed successfully."
+          PR_FILE="${{ github.workspace }}/minion-pr-urls.txt"
+          if [ -f "$PR_FILE" ] && [ -s "$PR_FILE" ]; then
+            COMMENT="${COMMENT}\n\nPRs created:"
+            while IFS= read -r url; do
+              COMMENT="${COMMENT}\n- ${url}"
+            done < "$PR_FILE"
+          fi
           gh issue edit "$ISSUE_NUM" --repo "${{ github.repository }}" \
             --add-label "minion-done" --remove-label "minion-executing"
           gh issue close "$ISSUE_NUM" --repo "${{ github.repository }}" \
-            --comment "Minion completed successfully. PRs have been created."
+            --comment "$(echo -e "$COMMENT")"
 
       # On failure: mark failed with logs link
       - name: Mark failed
