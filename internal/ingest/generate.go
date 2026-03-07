@@ -21,6 +21,7 @@ type Feature struct {
 	Title              string   `json:"title" yaml:"title"`
 	Source             string   `json:"source" yaml:"source"`
 	Description        string   `json:"description" yaml:"description"`
+	Why                string   `json:"why" yaml:"why"`
 	TargetRepos        []string `json:"target_repos" yaml:"target_repos"`
 	ContextHints       []string `json:"context_hints" yaml:"context_hints"`
 	AcceptanceCriteria []string `json:"acceptance_criteria" yaml:"acceptance_criteria"`
@@ -89,6 +90,7 @@ type taskFileData struct {
 	Source             string   `yaml:"source"`
 	SourceType         string   `yaml:"source_type"`
 	Description        string   `yaml:"description"`
+	Why                string   `yaml:"why"`
 	TargetRepos        []string `yaml:"target_repos"`
 	ContextHints       []string `yaml:"context_hints"`
 	AcceptanceCriteria []string `yaml:"acceptance_criteria"`
@@ -102,6 +104,7 @@ func writeTaskFile(f Feature, sourceType, outputDir string) error {
 		Source:             f.Source,
 		SourceType:         sourceType,
 		Description:        f.Description,
+		Why:                f.Why,
 		TargetRepos:        f.TargetRepos,
 		ContextHints:       f.ContextHints,
 		AcceptanceCriteria: f.AcceptanceCriteria,

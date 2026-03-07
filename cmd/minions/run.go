@@ -266,7 +266,7 @@ Fix the errors and ensure all checks pass. Do not introduce new changes beyond w
 
 	// Create PRs
 	fmt.Println("--- Creating PRs ---")
-	prURLs, err := pr.CreateAndLinkAll(t.ID, t.Title, workspaceRoot, labelsCSV, t.TargetRepos)
+	prURLs, err := pr.CreateAndLinkAll(t.ID, t.Title, t.Description, t.Why, workspaceRoot, labelsCSV, t.TargetRepos)
 	if err != nil {
 		cleanupWorktrees(t.TargetRepos, t.ID, workspaceRoot)
 		return fmt.Errorf("PR creation failed: %w", err)

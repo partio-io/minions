@@ -18,7 +18,7 @@ func Crosslink(prURL1, prURL2 string) {
 }
 
 // CreateAndLinkAll creates PRs in all repos that have changes and cross-links them.
-func CreateAndLinkAll(taskID, title, workspaceRoot, labelsCSV string, repos []string) ([]string, error) {
+func CreateAndLinkAll(taskID, title, description, why, workspaceRoot, labelsCSV string, repos []string) ([]string, error) {
 	var labels []string
 	if labelsCSV != "" {
 		labels = strings.Split(labelsCSV, ",")
@@ -30,7 +30,7 @@ func CreateAndLinkAll(taskID, title, workspaceRoot, labelsCSV string, repos []st
 		wtPath := filepath.Join(workspaceRoot, repo, ".minion-worktrees", taskID)
 		repoFullName := "partio-io/" + repo
 
-		prURL, err := Create(wtPath, repoFullName, taskID, title, labels)
+		prURL, err := Create(wtPath, repoFullName, taskID, title, description, why, labels)
 		if err != nil {
 			slog.Error("failed to create PR", "repo", repo, "error", err)
 			continue
