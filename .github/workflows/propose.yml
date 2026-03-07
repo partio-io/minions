@@ -26,6 +26,18 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      - name: Check authorization
+        if: github.event_name != 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+        run: |
+          ROLE=$(gh api "orgs/partio-io/memberships/${{ github.actor }}" --jq '.role' 2>/dev/null || echo "none")
+          if [ "$ROLE" != "admin" ]; then
+            echo "::error::Unauthorized: ${{ github.actor }} (role: ${ROLE}) is not a partio-io org admin"
+            exit 1
+          fi
+          echo "Authorized: ${{ github.actor }} (org role: ${ROLE})"
+
       - name: Checkout minions
         uses: actions/checkout@v4
         with:

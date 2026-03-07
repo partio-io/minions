@@ -42,6 +42,18 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      - name: Check authorization
+        if: github.event_name != 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+        run: |
+          ROLE=$(gh api "orgs/partio-io/memberships/${{ github.actor }}" --jq '.role' 2>/dev/null || echo "none")
+          if [ "$ROLE" != "admin" ]; then
+            echo "::error::Unauthorized: ${{ github.actor }} (role: ${ROLE}) is not a partio-io org admin"
+            exit 1
+          fi
+          echo "Authorized: ${{ github.actor }} (org role: ${ROLE})"
+
       # Mark issue as executing (issue-triggered runs only)
       - name: Mark executing
         if: github.event_name != 'workflow_dispatch'
