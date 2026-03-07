@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/partio-io/minions/internal/claude"
@@ -74,11 +75,21 @@ func ExtractFeatures(sourceType, sourceURL, content string) ([]ingest.Feature, e
 	return features, nil
 }
 
-// ProcessSource fetches a changelog, detects new versions, extracts features, and creates proposal issues.
-// Returns the latest version string processed (for updating sources.yaml).
+// ProcessSource dispatches to the appropriate handler based on source type.
+// Returns the latest version/cursor string processed (for updating sources.yaml).
 func ProcessSource(src Source, repo string, dryRun bool) (string, error) {
-	slog.Info("processing source", "name", src.Name, "url", src.URL, "last_version", src.LastVersion)
+	slog.Info("processing source", "name", src.Name, "type", src.Type, "url", src.URL, "last_version", src.LastVersion)
 
+	switch src.Type {
+	case "issues", "pulls":
+		return processGitHubItems(src, repo, dryRun)
+	default:
+		return processChangelog(src, repo, dryRun)
+	}
+}
+
+// processChangelog handles changelog-type sources (original behavior).
+func processChangelog(src Source, repo string, dryRun bool) (string, error) {
 	content, err := ingest.FetchChangelog(src.URL)
 	if err != nil {
 		return "", fmt.Errorf("fetching changelog for %s: %w", src.Name, err)
@@ -118,9 +129,78 @@ func ProcessSource(src Source, repo string, dryRun bool) (string, error) {
 		return "", fmt.Errorf("extracting features for %s: %w", src.Name, err)
 	}
 
+	createProposalIssues(features, repo, src, dryRun)
+	return latestVersion, nil
+}
+
+// processGitHubItems handles issues and pulls source types.
+func processGitHubItems(src Source, repo string, dryRun bool) (string, error) {
+	sourceRepo := src.Repo
+	if sourceRepo == "" {
+		return "", fmt.Errorf("source %s has type %q but no repo field", src.Name, src.Type)
+	}
+
+	var items []ingest.GHItem
+	var err error
+	switch src.Type {
+	case "issues":
+		items, err = ingest.FetchRepoIssues(sourceRepo)
+	case "pulls":
+		items, err = ingest.FetchRepoPulls(sourceRepo)
+	}
+	if err != nil {
+		return "", fmt.Errorf("fetching %s for %s: %w", src.Type, src.Name, err)
+	}
+
+	// Parse last_version as the last-seen item number
+	lastSeen := 0
+	if src.LastVersion != "" && src.LastVersion != "0" {
+		lastSeen, err = strconv.Atoi(src.LastVersion)
+		if err != nil {
+			return "", fmt.Errorf("parsing last_version %q as int: %w", src.LastVersion, err)
+		}
+	}
+
+	// Filter to items newer than lastSeen
+	var newItems []ingest.GHItem
+	for _, item := range items {
+		if item.Number > lastSeen {
+			newItems = append(newItems, item)
+		}
+	}
+
+	if len(newItems) == 0 {
+		slog.Info("no new items", "source", src.Name, "type", src.Type)
+		return src.LastVersion, nil
+	}
+
+	slog.Info("found new items", "source", src.Name, "type", src.Type, "count", len(newItems))
+
+	// Format items as markdown for feature extraction
+	var content strings.Builder
+	highestNumber := 0
+	for _, item := range newItems {
+		fmt.Fprintf(&content, "## #%d: %s\n\n%s\n\n", item.Number, item.Title, item.Body)
+		if item.Number > highestNumber {
+			highestNumber = item.Number
+		}
+	}
+
+	sourceRef := fmt.Sprintf("%s/%s (%s)", sourceRepo, src.Type, src.Name)
+	features, err := ExtractFeatures(src.Type, sourceRef, content.String())
+	if err != nil {
+		return "", fmt.Errorf("extracting features for %s: %w", src.Name, err)
+	}
+
+	createProposalIssues(features, repo, src, dryRun)
+	return strconv.Itoa(highestNumber), nil
+}
+
+// createProposalIssues creates proposal issues for extracted features.
+func createProposalIssues(features []ingest.Feature, repo string, src Source, dryRun bool) {
 	if len(features) == 0 {
 		slog.Info("no relevant features found", "source", src.Name)
-		return latestVersion, nil
+		return
 	}
 
 	slog.Info("extracted features", "source", src.Name, "count", len(features))
@@ -144,13 +224,11 @@ func ProcessSource(src Source, repo string, dryRun bool) (string, error) {
 			continue
 		}
 
-		issueURL, err := CreateProposalIssue(repo, f, src.Name)
+		issueURL, err := CreateProposalIssue(repo, f, src.Name, src.Type)
 		if err != nil {
 			slog.Error("creating proposal issue", "feature", f.ID, "error", err)
 			continue
 		}
 		slog.Info("created proposal issue", "feature", f.ID, "url", issueURL)
 	}
-
-	return latestVersion, nil
 }

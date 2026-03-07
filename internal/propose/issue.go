@@ -30,9 +30,9 @@ func IssueExists(repo, featureID string) (bool, error) {
 }
 
 // CreateProposalIssue creates a GitHub issue with the minion-proposal label.
-func CreateProposalIssue(repo string, f ingest.Feature, sourceName string) (string, error) {
+func CreateProposalIssue(repo string, f ingest.Feature, sourceName, sourceType string) (string, error) {
 	title := f.Title
-	body := FormatIssueBody(f, sourceName)
+	body := FormatIssueBody(f, sourceName, sourceType)
 
 	cmd := exec.Command("gh", "issue", "create",
 		"--repo", repo,
@@ -49,7 +49,7 @@ func CreateProposalIssue(repo string, f ingest.Feature, sourceName string) (stri
 }
 
 // FormatIssueBody generates the full Markdown body for a proposal issue.
-func FormatIssueBody(f ingest.Feature, sourceName string) string {
+func FormatIssueBody(f ingest.Feature, sourceName, sourceType string) string {
 	var b strings.Builder
 
 	b.WriteString("## Description\n\n")
@@ -90,13 +90,13 @@ func FormatIssueBody(f ingest.Feature, sourceName string) string {
 	// Embedded task YAML for machine parsing
 	b.WriteString("---\n\n")
 	b.WriteString("Comment `/minion build` or add the `minion-approved` label to begin implementation.\n\n")
-	b.WriteString(embedTaskYAML(f))
+	b.WriteString(embedTaskYAML(f, sourceType))
 
 	return b.String()
 }
 
 // embedTaskYAML generates a hidden HTML comment containing the task spec as YAML.
-func embedTaskYAML(f ingest.Feature) string {
+func embedTaskYAML(f ingest.Feature, sourceType string) string {
 	task := struct {
 		ID                 string   `yaml:"id"`
 		Title              string   `yaml:"title"`
@@ -112,7 +112,7 @@ func embedTaskYAML(f ingest.Feature) string {
 		ID:                 f.ID,
 		Title:              f.Title,
 		Source:             f.Source,
-		SourceType:         "changelog",
+		SourceType:         sourceType,
 		Description:        f.Description,
 		Why:                f.Why,
 		TargetRepos:        f.TargetRepos,

@@ -12,6 +12,7 @@ type Source struct {
 	Name        string `yaml:"name"`
 	URL         string `yaml:"url"`
 	Type        string `yaml:"type"`
+	Repo        string `yaml:"repo,omitempty"`
 	LastVersion string `yaml:"last_version"`
 }
 

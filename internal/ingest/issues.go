@@ -42,6 +42,27 @@ func FetchIssues(repo, label string) ([]ghIssue, error) {
 	return issues, nil
 }
 
+// FetchRepoIssues fetches recent issues from a GitHub repo (no label filtering).
+func FetchRepoIssues(repo string) ([]GHItem, error) {
+	cmd := exec.Command("gh", "issue", "list",
+		"--repo", repo,
+		"--json", "number,title,body",
+		"--limit", "50",
+	)
+
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("fetching issues from %s: %w", repo, err)
+	}
+
+	var items []GHItem
+	if err := json.Unmarshal(out, &items); err != nil {
+		return nil, fmt.Errorf("parsing issues JSON: %w", err)
+	}
+
+	return items, nil
+}
+
 // IssueToTaskID converts an issue title to a kebab-case task ID.
 func IssueToTaskID(title string) string {
 	id := strings.ToLower(title)
