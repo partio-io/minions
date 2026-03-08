@@ -1,5 +1,9 @@
 # Partio Minions
 
+<p align="center">
+  <img src="assets/minion.png" alt="Partio Minion" width="200">
+</p>
+
 One-shot coding agents that generate PRs across all Partio repos.
 
 Inspired by [Stripe's minions system](https://www.youtube.com/watch?v=example) — fully unattended agents that create, test, and submit PRs without human interaction during execution.
