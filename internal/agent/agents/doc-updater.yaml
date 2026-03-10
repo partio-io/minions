@@ -1,0 +1,21 @@
+name: doc-updater
+description: Updates docs when code PRs merge
+prompt_template: doc-prompt.md
+target_repos: [docs]
+max_turns: 20
+allowed_tools: "Edit,Write,Read,Glob,Grep,Bash"
+checks: true
+create_pr: true
+pr_labels: [minion, documentation]
+skip_marker: ".no-update-needed"
+retry_on_fail: true
+retry_max_turns: 10
+context_providers:
+  - type: gh-pr-title
+    into: PR_TITLE
+  - type: gh-pr-body
+    into: PR_DESCRIPTION
+  - type: gh-pr-diff
+    into: PR_DIFF
+  - type: docs-claude-md
+    into: DOCS_CLAUDE_MD

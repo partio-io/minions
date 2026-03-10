@@ -175,7 +175,7 @@ jobs:
           else
             # Issue label trigger (minion-ready or minion-approved)
             ISSUE_NUM="${{ github.event.issue.number }}"
-            ISSUE_TITLE="${{ github.event.issue.title }}"
+            ISSUE_TITLE="$ISSUE_TITLE_ENV"
             ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --repo "${{ github.repository }}" --json body -q '.body')
 
             # Check for embedded task YAML (from minion-proposal issues)
@@ -213,6 +213,7 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+          ISSUE_TITLE_ENV: ${{ github.event.issue.title }}
 
       # Run the minion
       - name: Execute minion

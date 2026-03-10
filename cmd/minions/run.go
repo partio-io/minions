@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,34 +11,38 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/partio-io/minions/internal/checks"
-	"github.com/partio-io/minions/internal/claude"
-	"github.com/partio-io/minions/internal/git"
-	"github.com/partio-io/minions/internal/pr"
+	"github.com/partio-io/minions/internal/agent"
+	appcontext "github.com/partio-io/minions/internal/context"
+	"github.com/partio-io/minions/internal/pipeline"
 	"github.com/partio-io/minions/internal/prompt"
 	"github.com/partio-io/minions/internal/task"
-	"github.com/partio-io/minions/internal/worktree"
 )
 
 func newRunCmd() *cobra.Command {
 	var dryRun bool
 	var parallel int
+	var agentName string
+	var prRef string
+	var contextJSON string
 
 	cmd := &cobra.Command{
-		Use:   "run <path>",
-		Short: "Execute task specs end-to-end",
-		Long:  `Execute one or more task YAML files. Creates worktrees, runs Claude Code, validates checks, and creates PRs.`,
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			target := args[0]
+		Use:   "run [path]",
+		Short: "Execute task specs or agent types end-to-end",
+		Long: `Execute one or more task YAML files, or run a named agent type.
 
+Examples:
+  minions run tasks/my-task.yaml
+  minions run tasks/ --parallel 3
+  minions run --agent doc-updater --pr partio-io/cli#42
+  minions run --agent readme-updater --pr partio-io/app#42`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if cfg.DryRun {
 				dryRun = true
 			}
 
 			workspaceRoot := cfg.WorkspaceRoot
 			if workspaceRoot == "" {
-				// Default: parent of the directory containing the binary or cwd
 				wd, err := os.Getwd()
 				if err != nil {
 					return fmt.Errorf("getting working directory: %w", err)
@@ -45,63 +50,80 @@ func newRunCmd() *cobra.Command {
 				workspaceRoot = filepath.Dir(wd)
 			}
 
-			// Load tasks
-			var tasks []*task.Task
-			info, err := os.Stat(target)
-			if err != nil {
-				return fmt.Errorf("cannot access %s: %w", target, err)
+			// Agent mode: --agent flag specified
+			if agentName != "" {
+				return runAgent(agentName, prRef, contextJSON, workspaceRoot, dryRun)
 			}
 
-			if info.IsDir() {
-				tasks, err = task.LoadDir(target)
-				if err != nil {
-					return err
-				}
-			} else {
-				t, err := task.LoadFile(target)
-				if err != nil {
-					return err
-				}
-				tasks = []*task.Task{t}
+			// Task mode: path argument required
+			if len(args) == 0 {
+				return fmt.Errorf("either a task path or --agent is required")
 			}
 
-			if len(tasks) == 0 {
-				fmt.Println("No task files found in", target)
-				return nil
-			}
-
-			fmt.Printf("Found %d task(s) to process\n", len(tasks))
-			fmt.Printf("Workspace root: %s\n", workspaceRoot)
-			fmt.Printf("Parallel: %d\n", parallel)
-			fmt.Printf("Dry run: %v\n\n", dryRun)
-
-			var failed bool
-			if parallel <= 1 {
-				for _, t := range tasks {
-					if err := executeTask(t, workspaceRoot, dryRun); err != nil {
-						slog.Error("task failed", "task", t.ID, "error", err)
-						failed = true
-					}
-				}
-			} else {
-				failed = runParallel(tasks, workspaceRoot, dryRun, parallel)
-			}
-
-			fmt.Println("==========================================")
-			fmt.Println("All tasks complete.")
-			fmt.Println("==========================================")
-
-			if failed {
-				return fmt.Errorf("one or more tasks failed")
-			}
-			return nil
+			return runTasks(args[0], workspaceRoot, dryRun, parallel)
 		},
 	}
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview generated prompt without executing")
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "max parallel task executions")
+	cmd.Flags().StringVar(&agentName, "agent", "", "agent type to run (e.g., doc-updater, readme-updater)")
+	cmd.Flags().StringVar(&prRef, "pr", "", "PR reference for PR-triggered agents (e.g., partio-io/cli#42)")
+	cmd.Flags().StringVar(&contextJSON, "context", "", "JSON context for the agent")
 
 	return cmd
+}
+
+// runTasks executes task YAML files using the task-runner pipeline.
+func runTasks(target, workspaceRoot string, dryRun bool, parallel int) error {
+	var tasks []*task.Task
+	info, err := os.Stat(target)
+	if err != nil {
+		return fmt.Errorf("cannot access %s: %w", target, err)
+	}
+
+	if info.IsDir() {
+		tasks, err = task.LoadDir(target)
+		if err != nil {
+			return err
+		}
+	} else {
+		t, err := task.LoadFile(target)
+		if err != nil {
+			return err
+		}
+		tasks = []*task.Task{t}
+	}
+
+	if len(tasks) == 0 {
+		fmt.Println("No task files found in", target)
+		return nil
+	}
+
+	fmt.Printf("Found %d task(s) to process\n", len(tasks))
+	fmt.Printf("Workspace root: %s\n", workspaceRoot)
+	fmt.Printf("Parallel: %d\n", parallel)
+	fmt.Printf("Dry run: %v\n\n", dryRun)
+
+	var failed bool
+	if parallel <= 1 {
+		for _, t := range tasks {
+			if err := executeTask(t, workspaceRoot, dryRun); err != nil {
+				slog.Error("task failed", "task", t.ID, "error", err)
+				failed = true
+			}
+		}
+	} else {
+		failed = runParallel(tasks, workspaceRoot, dryRun, parallel)
+	}
+
+	fmt.Println("==========================================")
+	fmt.Println("All tasks complete.")
+	fmt.Println("==========================================")
+
+	if failed {
+		return fmt.Errorf("one or more tasks failed")
+	}
+	return nil
 }
 
 func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
@@ -117,186 +139,166 @@ func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
 		return fmt.Errorf("building prompt: %w", err)
 	}
 
-	debugDir := debugDirForTask(t.ID)
-	if debugDir != "" {
-		if err := os.WriteFile(filepath.Join(debugDir, "prompt.md"), []byte(taskPrompt), 0644); err != nil {
-			slog.Warn("failed to save debug prompt", "error", err)
-		}
-	}
-
-	if dryRun {
-		fmt.Println()
-		fmt.Println("=== DRY RUN: Generated Prompt ===")
-		fmt.Println(taskPrompt)
-		fmt.Println("=== END PROMPT ===")
-		fmt.Println()
-		fmt.Println("Would create worktrees in:", t.TargetRepos)
-		fmt.Printf("Would run: claude -p --max-turns %d\n", cfg.MaxTurns)
-		return nil
-	}
-
-	// Read PR labels
+	// Build labels CSV
 	labelsCSV := "minion"
 	if len(t.PRLabels) > 0 {
-		labelsCSV = ""
-		for i, l := range t.PRLabels {
-			if i > 0 {
-				labelsCSV += ","
-			}
-			labelsCSV += l
-		}
+		labelsCSV = strings.Join(t.PRLabels, ",")
+	}
+	labels := strings.Split(labelsCSV, ",")
+
+	def := pipeline.Def{
+		Name:            "task-runner",
+		TaskID:          t.ID,
+		WorkspaceRoot:   workspaceRoot,
+		TargetRepos:     t.TargetRepos,
+		PromptText:      taskPrompt,
+		MaxTurns:        cfg.MaxTurns,
+		AllowedTools:    "Edit,Write,Read,Glob,Grep,Bash",
+		RunChecks:       true,
+		RetryOnFail:     true,
+		RetryMaxTurns:   15,
+		CreatePR:        true,
+		PRLabels:        labels,
+		TaskTitle:       t.Title,
+		TaskDescription: t.Description,
+		TaskWhy:         t.Why,
+		DryRun:          dryRun,
+		DebugDir:        debugDirForTask(t.ID),
 	}
 
-	// Create worktrees
-	fmt.Println("--- Creating worktrees ---")
-	var worktreePaths []string
-	var worktreeRepos []string
-	for _, repo := range t.TargetRepos {
-		repoPath := filepath.Join(workspaceRoot, repo)
-		if _, err := os.Stat(repoPath); os.IsNotExist(err) {
-			slog.Warn("repo not found, skipping", "path", repoPath)
-			continue
-		}
-		wtPath, err := worktree.Create(repoPath, t.ID)
-		if err != nil {
-			return fmt.Errorf("creating worktree for %s: %w", repo, err)
-		}
-		worktreePaths = append(worktreePaths, wtPath)
-		worktreeRepos = append(worktreeRepos, repo)
-		fmt.Printf("Created worktree: %s\n", wtPath)
-	}
-
-	if len(worktreePaths) == 0 {
-		return fmt.Errorf("no worktrees created")
-	}
-
-	// Create virtual workspace directory with symlinks to worktrees
-	virtualWS, err := os.MkdirTemp("", "minion-workspace-*")
+	result, err := pipeline.Execute(def)
 	if err != nil {
-		return fmt.Errorf("creating virtual workspace: %w", err)
-	}
-	defer os.RemoveAll(virtualWS)
-
-	for i, repo := range worktreeRepos {
-		if err := os.Symlink(worktreePaths[i], filepath.Join(virtualWS, repo)); err != nil {
-			return fmt.Errorf("creating symlink for %s: %w", repo, err)
-		}
+		return err
 	}
 
-	// Run Claude Code
-	fmt.Println("--- Running Claude Code ---")
-	var logFile string
-	if debugDir != "" {
-		logFile = filepath.Join(debugDir, "claude-output.jsonl")
+	for _, url := range result.PRURLs {
+		fmt.Printf("PR: %s\n", url)
 	}
-	err = claude.Run(claude.Opts{
-		Prompt:   taskPrompt,
-		CWD:      virtualWS,
-		MaxTurns: cfg.MaxTurns,
-		LogFile:  logFile,
-	})
-	if err != nil {
-		slog.Warn("claude exited with error", "error", err)
-	}
-
-	// Check for changes before running checks
-	hasChanges := false
-	for i, wtPath := range worktreePaths {
-		status, _ := git.ExecGitDir(wtPath, "status", "--porcelain")
-		if strings.TrimSpace(status) != "" {
-			hasChanges = true
-			slog.Info("worktree has changes", "repo", worktreeRepos[i], "status", strings.TrimSpace(status))
-		} else {
-			slog.Info("worktree has no changes", "repo", worktreeRepos[i])
-		}
-	}
-	if !hasChanges {
-		slog.Warn("claude produced no changes in any repo")
-		cleanupWorktrees(t.TargetRepos, t.ID, workspaceRoot)
-		return fmt.Errorf("no changes produced for task %s", t.ID)
-	}
-
-	// Run checks
-	fmt.Println("--- Running checks ---")
-	allPass := true
-	var failedOutput string
-	for _, wtPath := range worktreePaths {
-		output, err := checks.Run(wtPath)
-		if err != nil {
-			allPass = false
-			failedOutput += output + "\n"
-		}
-	}
-
-	// Retry on failure
-	if !allPass {
-		fmt.Println("--- Checks failed, retrying with error feedback ---")
-		retryPrompt := fmt.Sprintf(`The following checks failed after your implementation. Please fix the issues:
-
-%s
-
-Fix the errors and ensure all checks pass. Do not introduce new changes beyond what's needed to fix the failures.`, failedOutput)
-
-		var retryLogFile string
-		if debugDir != "" {
-			retryLogFile = filepath.Join(debugDir, "claude-retry-output.jsonl")
-		}
-		_ = claude.Run(claude.Opts{
-			Prompt:   retryPrompt,
-			CWD:      virtualWS,
-			MaxTurns: 15,
-			LogFile:  retryLogFile,
-		})
-
-		// Re-run checks
-		fmt.Println("--- Re-running checks after retry ---")
-		allPass = true
-		for _, wtPath := range worktreePaths {
-			if _, err := checks.Run(wtPath); err != nil {
-				allPass = false
-			}
-		}
-
-		if !allPass {
-			slog.Error("checks still failing after retry, skipping PR creation")
-			cleanupWorktrees(t.TargetRepos, t.ID, workspaceRoot)
-			return fmt.Errorf("checks failed for task %s", t.ID)
-		}
-	}
-
-	// Create PRs
-	fmt.Println("--- Creating PRs ---")
-	prURLs, err := pr.CreateAndLinkAll(t.ID, t.Title, t.Description, t.Why, workspaceRoot, labelsCSV, t.TargetRepos)
-	if err != nil {
-		cleanupWorktrees(t.TargetRepos, t.ID, workspaceRoot)
-		return fmt.Errorf("PR creation failed: %w", err)
-	}
-	if len(prURLs) == 0 {
-		cleanupWorktrees(t.TargetRepos, t.ID, workspaceRoot)
-		return fmt.Errorf("no PRs created for task %s", t.ID)
-	}
-
-	if prURLsFile := os.Getenv("MINION_PR_URLS_FILE"); prURLsFile != "" {
-		if f, err := os.OpenFile(prURLsFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-			for _, u := range prURLs {
-				fmt.Fprintln(f, u)
-			}
-			f.Close()
-		}
-	}
-
-	// Cleanup
-	fmt.Println("--- Cleaning up worktrees ---")
-	cleanupWorktrees(t.TargetRepos, t.ID, workspaceRoot)
-
 	fmt.Printf("\nDONE: %s\n\n", t.ID)
 	return nil
 }
 
-func cleanupWorktrees(repos []string, taskID, workspaceRoot string) {
-	for _, repo := range repos {
-		worktree.Cleanup(filepath.Join(workspaceRoot, repo), taskID)
+// runAgent loads an agent definition and executes it.
+func runAgent(agentName, prRef, contextJSON, workspaceRoot string, dryRun bool) error {
+	agentDef, err := agent.Load(agentName)
+	if err != nil {
+		return err
 	}
+
+	fmt.Println("==========================================")
+	fmt.Printf("AGENT: %s\n", agentDef.Name)
+	fmt.Printf("DESCRIPTION: %s\n", agentDef.Description)
+	fmt.Println("==========================================")
+
+	// Parse context JSON
+	vars := make(map[string]string)
+	if contextJSON != "" {
+		if err := json.Unmarshal([]byte(contextJSON), &vars); err != nil {
+			return fmt.Errorf("parsing --context JSON: %w", err)
+		}
+	}
+
+	// Parse --pr flag
+	var prRepo, prNumber, repoShort string
+	if prRef != "" {
+		parts := strings.SplitN(prRef, "#", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("invalid PR reference: %s (expected owner/repo#number)", prRef)
+		}
+		prRepo = parts[0]
+		prNumber = parts[1]
+		repoShort = prRepo
+		if idx := strings.LastIndex(prRepo, "/"); idx >= 0 {
+			repoShort = prRepo[idx+1:]
+		}
+		vars["PR_REF"] = prRef
+		vars["PR_REPO"] = prRepo
+		vars["PR_NUMBER"] = prNumber
+	}
+
+	// Run context providers
+	if len(agentDef.ContextProviders) > 0 {
+		fmt.Println("--- Gathering context ---")
+		input := appcontext.ProviderInput{
+			PRRepo:        prRepo,
+			PRNumber:      prNumber,
+			WorkspaceRoot: workspaceRoot,
+			RepoShort:     repoShort,
+			PromptsDir:    filepath.Join(workspaceRoot, "minions", "prompts"),
+		}
+		if err := appcontext.RunProviders(agentDef.ContextProviders, input, vars); err != nil {
+			return err
+		}
+	}
+
+	// Determine target repos
+	targetRepos := agentDef.TargetRepos
+	if repoShort != "" && len(targetRepos) == 0 {
+		// For agents like readme-updater, the target repo is the PR's repo
+		targetRepos = []string{repoShort}
+	}
+
+	// Build task ID
+	taskID := agentDef.Name
+	if prRepo != "" && prNumber != "" {
+		taskID = fmt.Sprintf("%s-%s-%s", agentDef.Name, strings.ReplaceAll(prRepo, "/", "-"), prNumber)
+	}
+
+	// Build PR metadata
+	var commitMsg, prTitle, prBody, prRepoFull string
+	sourcePRTitle := vars["PR_TITLE"]
+	if sourcePRTitle == "" {
+		sourcePRTitle = "Unknown"
+	}
+
+	if len(targetRepos) == 1 && prRepo != "" {
+		prRepoFull = prRepo
+		if agentDef.Name == "doc-updater" {
+			prRepoFull = "partio-io/docs"
+		}
+
+		commitMsg = fmt.Sprintf("docs: update for %s#%s\n\nAutomated by partio-io/minions (%s).\nSource PR: %s#%s\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+			prRepo, prNumber, agentDef.Name, prRepo, prNumber)
+
+		prTitle = fmt.Sprintf("[%s] Update for %s#%s: %s", agentDef.Name, prRepo, prNumber, sourcePRTitle)
+
+		prBody = fmt.Sprintf("## Summary\n\nAutomated update for %s#%s.\n\n**Source PR:** https://github.com/%s/pull/%s\n\n---\n\n*This PR was created by the %s. Please review carefully.*",
+			prRepo, prNumber, prRepo, prNumber, agentDef.Name)
+	}
+
+	opts := agent.PipelineOpts{
+		TaskID:         taskID,
+		WorkspaceRoot:  workspaceRoot,
+		TargetRepos:    targetRepos,
+		CommitMsg:      commitMsg,
+		PRTitle:        prTitle,
+		PRBody:         prBody,
+		PRRepo:         prRepoFull,
+		SourcePRRepo:   prRepo,
+		SourcePRNumber: prNumber,
+		DryRun:         dryRun,
+		DebugDir:       debugDirForTask(taskID),
+	}
+
+	if cfg.MaxTurns > 0 && cfg.MaxTurns < agentDef.MaxTurns {
+		opts.MaxTurns = cfg.MaxTurns
+	}
+
+	def, err := agent.BuildPipelineDef(agentDef, vars, opts)
+	if err != nil {
+		return err
+	}
+
+	result, err := pipeline.Execute(*def)
+	if err != nil {
+		return err
+	}
+
+	for _, url := range result.PRURLs {
+		fmt.Printf("PR: %s\n", url)
+	}
+	fmt.Printf("\nDONE: %s\n\n", agentDef.Name)
+	return nil
 }
 
 func debugDirForTask(taskID string) string {
