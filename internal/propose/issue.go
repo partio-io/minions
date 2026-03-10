@@ -62,6 +62,12 @@ func FormatIssueBody(f ingest.Feature, sourceName, sourceType string) string {
 		b.WriteString("\n\n")
 	}
 
+	if f.UserRelevance != "" {
+		b.WriteString("## User Relevance\n\n")
+		b.WriteString(f.UserRelevance)
+		b.WriteString("\n\n")
+	}
+
 	b.WriteString("## Source\n\n")
 	b.WriteString(fmt.Sprintf("- **Origin:** %s\n", f.Source))
 	b.WriteString(fmt.Sprintf("- **Detected from:** `%s`\n", sourceName))
@@ -104,6 +110,7 @@ func embedTaskYAML(f ingest.Feature, sourceType string) string {
 		SourceType         string   `yaml:"source_type"`
 		Description        string   `yaml:"description"`
 		Why                string   `yaml:"why,omitempty"`
+		UserRelevance      string   `yaml:"user_relevance,omitempty"`
 		TargetRepos        []string `yaml:"target_repos"`
 		ContextHints       []string `yaml:"context_hints"`
 		AcceptanceCriteria []string `yaml:"acceptance_criteria"`
@@ -115,6 +122,7 @@ func embedTaskYAML(f ingest.Feature, sourceType string) string {
 		SourceType:         sourceType,
 		Description:        f.Description,
 		Why:                f.Why,
+		UserRelevance:      f.UserRelevance,
 		TargetRepos:        f.TargetRepos,
 		ContextHints:       f.ContextHints,
 		AcceptanceCriteria: f.AcceptanceCriteria,

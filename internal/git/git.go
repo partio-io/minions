@@ -7,11 +7,12 @@ import (
 )
 
 // ExecGit runs a git command and returns trimmed stdout.
+// Uses CombinedOutput so git error messages (from stderr) are included in errors.
 func ExecGit(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		return "", fmt.Errorf("git %s: %s: %w", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

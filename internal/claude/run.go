@@ -13,10 +13,11 @@ import (
 
 // Opts configures a headless Claude Code invocation.
 type Opts struct {
-	Prompt   string
-	CWD      string
-	MaxTurns int
-	LogFile  string // If set, tee stdout to this file for debug observability
+	Prompt       string
+	CWD          string
+	MaxTurns     int
+	AllowedTools string // Comma-separated tool list. Defaults to "Edit,Write,Read,Glob,Grep,Bash".
+	LogFile      string // If set, tee stdout to this file for debug observability
 }
 
 // Run executes `claude -p` in headless mode with the given options.
@@ -25,9 +26,14 @@ func Run(opts Opts) error {
 		opts.MaxTurns = 30
 	}
 
+	allowedTools := opts.AllowedTools
+	if allowedTools == "" {
+		allowedTools = "Edit,Write,Read,Glob,Grep,Bash"
+	}
+
 	args := []string{
 		"-p", opts.Prompt,
-		"--allowedTools", "Edit,Write,Read,Glob,Grep,Bash",
+		"--allowedTools", allowedTools,
 		"--max-turns", strconv.Itoa(opts.MaxTurns),
 		"--output-format", "stream-json",
 		"--verbose",
