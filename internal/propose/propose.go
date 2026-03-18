@@ -197,7 +197,13 @@ func processGitHubItems(src Source, repo string, dryRun bool) (string, error) {
 }
 
 // createProposalIssues creates proposal issues for extracted features.
+// It derives the source repo from the Source config to scope backlink suppression.
 func createProposalIssues(features []ingest.Feature, repo string, src Source, dryRun bool) {
+	sourceRepo := src.Repo
+	if sourceRepo == "" {
+		sourceRepo = sourceRepoFromURL(src.URL)
+	}
+
 	if len(features) == 0 {
 		slog.Info("no relevant features found", "source", src.Name)
 		return
@@ -224,7 +230,7 @@ func createProposalIssues(features []ingest.Feature, repo string, src Source, dr
 			continue
 		}
 
-		issueURL, err := CreateProposalIssue(repo, f, src.Name, src.Type)
+		issueURL, err := CreateProposalIssue(repo, f, src.Name, src.Type, sourceRepo)
 		if err != nil {
 			slog.Error("creating proposal issue", "feature", f.ID, "error", err)
 			continue
