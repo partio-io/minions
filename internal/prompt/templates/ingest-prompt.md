@@ -29,6 +29,7 @@ For each feature idea, output a JSON object with these fields:
   "source": "reference to original (e.g., 'entireio/cli#373 (changelog 0.4.5)')",
   "description": "What Partio should implement, adapted for its own architecture and conventions. Be specific about the desired behavior.",
   "why": "Brief explanation of why this matters for Partio — what problem it solves or what value it adds for users.",
+  "user_relevance": "Why this change is relevant to Partio users — how it improves their experience, workflow, or the value they get from Partio.",
   "target_repos": ["cli", "docs"],
   "context_hints": ["cli/internal/relevant/path/"],
   "acceptance_criteria": ["specific testable criterion 1", "specific testable criterion 2"]

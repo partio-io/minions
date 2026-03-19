@@ -10,6 +10,7 @@ type Task struct {
 	SourceType         string   `yaml:"source_type"`
 	Description        string   `yaml:"description"`
 	Why                string   `yaml:"why"`
+	UserRelevance      string   `yaml:"user_relevance"`
 	TargetRepos        []string `yaml:"target_repos"`
 	ContextHints       []string `yaml:"context_hints"`
 	AcceptanceCriteria []string `yaml:"acceptance_criteria"`

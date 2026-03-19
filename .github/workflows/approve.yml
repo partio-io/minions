@@ -1,9 +1,6 @@
 name: Auto-Approve Proposals
 
 on:
-  schedule:
-    - cron: "0 9,21 * * *"  # 1 hour after propose (09:00, 21:00 UTC)
-
   workflow_dispatch:
     inputs:
       delay:

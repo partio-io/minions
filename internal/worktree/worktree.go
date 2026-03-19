@@ -45,6 +45,9 @@ func Create(repoPath, taskID string) (string, error) {
 	if _, err := git.ExecGitDir(wtPath, "config", "user.email", "minion[bot]@users.noreply.github.com"); err != nil {
 		return "", fmt.Errorf("configuring git user.email: %w", err)
 	}
+	if _, err := git.ExecGitDir(wtPath, "config", "commit.gpgsign", "false"); err != nil {
+		return "", fmt.Errorf("configuring commit.gpgsign: %w", err)
+	}
 
 	return wtPath, nil
 }

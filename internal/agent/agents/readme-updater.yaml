@@ -1,0 +1,23 @@
+name: readme-updater
+description: Updates a repo's README based on a merged PR
+prompt_template: readme-prompt.md
+max_turns: 10
+allowed_tools: "Edit,Write,Read,Glob,Grep,Bash"
+checks: false
+create_pr: true
+pr_labels: [minion]
+skip_marker: ".no-update-needed"
+stage_files: [README.md]
+context_providers:
+  - type: gh-pr-title
+    into: PR_TITLE
+  - type: gh-pr-body
+    into: PR_DESCRIPTION
+  - type: gh-pr-diff
+    into: PR_DIFF
+  - type: custom-prompt
+    into: CUSTOM_PROMPT
+  - type: current-readme
+    into: CURRENT_README
+  - type: repo-claude-md
+    into: REPO_CLAUDE_MD
