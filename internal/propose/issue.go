@@ -3,12 +3,46 @@ package propose
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/partio-io/minions/internal/ingest"
 
 	"gopkg.in/yaml.v3"
 )
+
+// crossRepoRefRe matches shorthand cross-repo references like "org/repo#123".
+var crossRepoRefRe = regexp.MustCompile(`([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)#(\d+)`)
+
+// githubRepoFromURLRe extracts "org/repo" from a GitHub URL.
+var githubRepoFromURLRe = regexp.MustCompile(`github\.com/([^/]+/[^/]+)`)
+
+// redirectRef rewrites org/repo#123 shorthand references as markdown links using
+// redirect.github.com, which preserves clickability but avoids creating backlinks
+// on the referenced issue/PR. Only refs matching sourceRepo are rewritten;
+// internal refs (e.g. to partio-io repos) are left as-is. See:
+// https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/autolinked-references-and-urls#avoiding-backlinks-to-linked-references
+func redirectRef(s, sourceRepo string) string {
+	if sourceRepo == "" {
+		return s
+	}
+	return crossRepoRefRe.ReplaceAllStringFunc(s, func(match string) string {
+		m := crossRepoRefRe.FindStringSubmatch(match)
+		if m[1] != sourceRepo {
+			return match
+		}
+		return fmt.Sprintf("[%s#%s](https://redirect.github.com/%s/issues/%s)", m[1], m[2], m[1], m[2])
+	})
+}
+
+// sourceRepoFromURL extracts "org/repo" from a GitHub URL.
+func sourceRepoFromURL(url string) string {
+	m := githubRepoFromURLRe.FindStringSubmatch(url)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
 
 // IssueExists checks if a proposal issue for the given featureID already exists.
 // It searches for issues with the minion-proposal label whose body contains the feature ID.
@@ -30,9 +64,9 @@ func IssueExists(repo, featureID string) (bool, error) {
 }
 
 // CreateProposalIssue creates a GitHub issue with the minion-proposal label.
-func CreateProposalIssue(repo string, f ingest.Feature, sourceName, sourceType string) (string, error) {
+func CreateProposalIssue(repo string, f ingest.Feature, sourceName, sourceType, sourceRepo string) (string, error) {
 	title := f.Title
-	body := FormatIssueBody(f, sourceName, sourceType)
+	body := FormatIssueBody(f, sourceName, sourceType, sourceRepo)
 
 	cmd := exec.Command("gh", "issue", "create",
 		"--repo", repo,
@@ -49,7 +83,9 @@ func CreateProposalIssue(repo string, f ingest.Feature, sourceName, sourceType s
 }
 
 // FormatIssueBody generates the full Markdown body for a proposal issue.
-func FormatIssueBody(f ingest.Feature, sourceName, sourceType string) string {
+// sourceRepo is the org/repo of the monitored source (e.g. "entireio/cli");
+// cross-repo refs matching it use redirect.github.com to avoid backlinks.
+func FormatIssueBody(f ingest.Feature, sourceName, sourceType, sourceRepo string) string {
 	var b strings.Builder
 
 	b.WriteString("## Description\n\n")
@@ -69,7 +105,7 @@ func FormatIssueBody(f ingest.Feature, sourceName, sourceType string) string {
 	}
 
 	b.WriteString("## Source\n\n")
-	b.WriteString(fmt.Sprintf("- **Origin:** %s\n", f.Source))
+	b.WriteString(fmt.Sprintf("- **Origin:** %s\n", redirectRef(f.Source, sourceRepo)))
 	b.WriteString(fmt.Sprintf("- **Detected from:** `%s`\n", sourceName))
 	b.WriteString("\n")
 
