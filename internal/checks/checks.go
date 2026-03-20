@@ -22,11 +22,11 @@ func Detect(repoPath string) RepoType {
 	if fileExists(filepath.Join(repoPath, "Makefile")) && fileExists(filepath.Join(repoPath, "go.mod")) {
 		return RepoGo
 	}
-	if fileExists(filepath.Join(repoPath, "package.json")) {
-		return RepoNode
-	}
 	if fileExists(filepath.Join(repoPath, "mint.json")) {
 		return RepoDocs
+	}
+	if fileExists(filepath.Join(repoPath, "package.json")) {
+		return RepoNode
 	}
 	return RepoUnknown
 }
