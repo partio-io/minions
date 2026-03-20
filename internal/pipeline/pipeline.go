@@ -234,7 +234,7 @@ func Execute(def Def) (*Result, error) {
 	if def.CreatePR {
 		fmt.Println("--- Creating PRs ---")
 
-		if multiRepo {
+		if multiRepo || def.CommitMsg == "" {
 			labelsCSV := strings.Join(def.PRLabels, ",")
 			if labelsCSV == "" {
 				labelsCSV = "minion"
