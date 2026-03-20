@@ -34,7 +34,7 @@ func Create(worktreePath, repoFullName, taskID, title, description, why string, 
 	}
 
 	// Push
-	if _, err := git.ExecGitDir(worktreePath, "push", "-u", "origin", branchName); err != nil {
+	if _, err := git.ExecGitDir(worktreePath, "push", "--force-with-lease", "-u", "origin", branchName); err != nil {
 		return "", fmt.Errorf("pushing branch: %w", err)
 	}
 
