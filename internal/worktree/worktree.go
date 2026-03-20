@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/partio-io/minions/internal/git"
 )
@@ -20,6 +21,15 @@ func Create(repoPath, taskID string) (string, error) {
 	// Verify it's a git repo
 	if _, err := git.ExecGitDir(repoPath, "rev-parse", "--git-dir"); err != nil {
 		return "", fmt.Errorf("%s is not a git repository: %w", repoPath, err)
+	}
+
+	// Unshallow if needed — CI checkouts are often shallow and worktree
+	// branches need shared history with main for PR creation.
+	if out, _ := git.ExecGitDir(repoPath, "rev-parse", "--is-shallow-repository"); strings.TrimSpace(out) == "true" {
+		slog.Info("unshallowing repository for worktree compatibility", "repo", repoPath)
+		if _, err := git.ExecGitDir(repoPath, "fetch", "--unshallow"); err != nil {
+			slog.Warn("could not unshallow repository", "error", err)
+		}
 	}
 
 	// Remove stale worktree if it exists
