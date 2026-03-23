@@ -1,8 +1,9 @@
 module github.com/partio-io/minions
 
-go 1.25.0
+go 1.26.0
 
 require (
+	github.com/partio-io/claude-agent-sdk-go v0.1.0
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
 )

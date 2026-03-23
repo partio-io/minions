@@ -32,6 +32,7 @@ func newIngestChangelogCmd() *cobra.Command {
 		Short: "Parse a changelog for feature ideas",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
 			url := args[0]
 			version := ""
 			if len(args) > 1 {
@@ -62,7 +63,7 @@ func newIngestChangelogCmd() *cobra.Command {
 
 			tasksDir := resolveTasksDir()
 			sourceRef := fmt.Sprintf("%s (%s)", url, firstNonEmpty(version, "all"))
-			count, err := ingest.GenerateTasks("changelog", sourceRef, content, tasksDir)
+			count, err := ingest.GenerateTasks(ctx, "changelog", sourceRef, content, tasksDir)
 			if err != nil {
 				return err
 			}
@@ -79,6 +80,7 @@ func newIngestBlogCmd() *cobra.Command {
 		Short: "Extract ideas from a blog post",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
 			url := args[0]
 
 			fmt.Printf("Ingesting blog post: %s\n", url)
@@ -94,7 +96,7 @@ func newIngestBlogCmd() *cobra.Command {
 			fmt.Printf("Blog content (%d chars). Sending to Claude for analysis...\n", len(content))
 
 			tasksDir := resolveTasksDir()
-			count, err := ingest.GenerateTasks("blog", url, content, tasksDir)
+			count, err := ingest.GenerateTasks(ctx, "blog", url, content, tasksDir)
 			if err != nil {
 				return err
 			}

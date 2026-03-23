@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -67,7 +68,7 @@ type Result struct {
 }
 
 // Execute runs the full pipeline: worktree -> claude -> checks -> PR.
-func Execute(def Def) (*Result, error) {
+func Execute(ctx context.Context, def Def) (*Result, error) {
 	if def.AllowedTools == "" {
 		def.AllowedTools = "Edit,Write,Read,Glob,Grep,Bash"
 	}
@@ -90,7 +91,7 @@ func Execute(def Def) (*Result, error) {
 		fmt.Println("=== END PROMPT ===")
 		fmt.Println()
 		fmt.Printf("Would create worktrees for: %v\n", def.TargetRepos)
-		fmt.Printf("Would run: claude -p --max-turns %d --allowedTools %s\n", def.MaxTurns, def.AllowedTools)
+		fmt.Printf("Would run: claude --max-turns %d --allowedTools %s\n", def.MaxTurns, def.AllowedTools)
 		return &Result{}, nil
 	}
 
@@ -151,9 +152,9 @@ func Execute(def Def) (*Result, error) {
 	fmt.Println("--- Running Claude Code ---")
 	var logFile string
 	if def.DebugDir != "" {
-		logFile = filepath.Join(def.DebugDir, "claude-output.jsonl")
+		logFile = filepath.Join(def.DebugDir, "claude-output.json")
 	}
-	err := claude.Run(claude.Opts{
+	result, err := claude.Run(ctx, claude.Opts{
 		Prompt:       def.PromptText,
 		CWD:          claudeCWD,
 		MaxTurns:     def.MaxTurns,
@@ -162,6 +163,8 @@ func Execute(def Def) (*Result, error) {
 	})
 	if err != nil {
 		slog.Warn("claude exited with error", "error", err)
+	} else if result.IsError {
+		slog.Warn("claude returned error result", "subtype", result.Subtype)
 	}
 
 	// Check skip marker
@@ -206,17 +209,22 @@ func Execute(def Def) (*Result, error) {
 
 			var retryLogFile string
 			if def.DebugDir != "" {
-				retryLogFile = filepath.Join(def.DebugDir, "claude-retry-output.jsonl")
+				retryLogFile = filepath.Join(def.DebugDir, "claude-retry-output.json")
 			}
 
 			retryPrompt := fmt.Sprintf("The following checks failed after your implementation. Please fix the issues:\n\n%s\n\nFix the errors and ensure all checks pass. Do not introduce new changes beyond what's needed to fix the failures.", failedOutput)
-			_ = claude.Run(claude.Opts{
+			retryResult, retryErr := claude.Run(ctx, claude.Opts{
 				Prompt:       retryPrompt,
 				CWD:          claudeCWD,
 				MaxTurns:     retryMaxTurns,
 				AllowedTools: def.AllowedTools,
 				LogFile:      retryLogFile,
 			})
+			if retryErr != nil {
+				slog.Warn("claude retry exited with error", "error", retryErr)
+			} else if retryResult.IsError {
+				slog.Warn("claude retry returned error result", "subtype", retryResult.Subtype)
+			}
 
 			fmt.Println("--- Re-running checks after retry ---")
 			allPass, _ = runChecks(worktreePaths)

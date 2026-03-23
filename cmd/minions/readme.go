@@ -22,6 +22,8 @@ func newReadmeCmd() *cobra.Command {
 		Short: "Update a repo's README based on a merged PR",
 		Long:  `Automatically updates README.md based on changes in a merged pull request.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
 			if prRef == "" {
 				return fmt.Errorf("--pr is required (e.g., --pr partio-io/app#42)")
 			}
@@ -95,7 +97,7 @@ func newReadmeCmd() *cobra.Command {
 				DryRun:         dryRun,
 			}
 
-			result, err := pipeline.Execute(def)
+			result, err := pipeline.Execute(ctx, def)
 			if err != nil {
 				return err
 			}
