@@ -1,13 +1,15 @@
 package ingest
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	claudesdk "github.com/partio-io/claude-agent-sdk-go"
 
 	"github.com/partio-io/minions/internal/claude"
 	"github.com/partio-io/minions/internal/prompt"
@@ -29,7 +31,7 @@ type Feature struct {
 }
 
 // GenerateTasks sends content to Claude for feature extraction and writes task YAML files.
-func GenerateTasks(sourceType, sourceURL, content, outputDir string) (int, error) {
+func GenerateTasks(ctx context.Context, sourceType, sourceURL, content, outputDir string) (int, error) {
 	// Build the ingest prompt from template
 	tmpl, err := prompt.Template("ingest-prompt.md")
 	if err != nil {
@@ -44,17 +46,15 @@ func GenerateTasks(sourceType, sourceURL, content, outputDir string) (int, error
 	// Run Claude to extract features
 	slog.Info("sending content to Claude for analysis", "source_type", sourceType, "content_len", len(content))
 
-	cmd := exec.Command("claude", "-p", "--output-format", "json")
-	cmd.Stdin = strings.NewReader(fullPrompt)
-	out, err := cmd.Output()
+	resultMsg, err := claudesdk.Prompt(ctx, fullPrompt)
 	if err != nil {
 		return 0, fmt.Errorf("claude failed to extract features: %w", err)
 	}
-
-	resultStr, err := claude.ExtractResult(out)
-	if err != nil {
-		return 0, fmt.Errorf("parsing claude output: %w", err)
+	if resultMsg.IsError || resultMsg.Result == nil {
+		return 0, fmt.Errorf("claude returned error: subtype=%s", resultMsg.Subtype)
 	}
+
+	resultStr := claude.StripCodeFences(*resultMsg.Result)
 
 	// Parse JSON array
 	var features []Feature

@@ -1,13 +1,15 @@
 package propose
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+
+	claudesdk "github.com/partio-io/claude-agent-sdk-go"
 
 	"github.com/partio-io/minions/internal/claude"
 	"github.com/partio-io/minions/internal/ingest"
@@ -42,7 +44,7 @@ func DetectNewVersions(content, lastVersion string) []string {
 
 // ExtractFeatures sends changelog content to Claude and returns extracted features.
 // This duplicates the Claude-calling portion of ingest.GenerateTasks but skips file writing.
-func ExtractFeatures(sourceType, sourceURL, content string) ([]ingest.Feature, error) {
+func ExtractFeatures(ctx context.Context, sourceType, sourceURL, content string) ([]ingest.Feature, error) {
 	tmpl, err := prompt.Template("ingest-prompt.md")
 	if err != nil {
 		return nil, fmt.Errorf("loading ingest template: %w", err)
@@ -55,17 +57,15 @@ func ExtractFeatures(sourceType, sourceURL, content string) ([]ingest.Feature, e
 
 	slog.Info("sending content to Claude for feature extraction", "source_type", sourceType, "content_len", len(content))
 
-	cmd := exec.Command("claude", "-p", "--output-format", "json")
-	cmd.Stdin = strings.NewReader(fullPrompt)
-	out, err := cmd.Output()
+	resultMsg, err := claudesdk.Prompt(ctx, fullPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("claude failed to extract features: %w", err)
 	}
-
-	resultStr, err := claude.ExtractResult(out)
-	if err != nil {
-		return nil, fmt.Errorf("parsing claude output: %w", err)
+	if resultMsg.IsError || resultMsg.Result == nil {
+		return nil, fmt.Errorf("claude returned error: subtype=%s", resultMsg.Subtype)
 	}
+
+	resultStr := claude.StripCodeFences(*resultMsg.Result)
 
 	var features []ingest.Feature
 	if err := json.Unmarshal([]byte(resultStr), &features); err != nil {
@@ -77,19 +77,19 @@ func ExtractFeatures(sourceType, sourceURL, content string) ([]ingest.Feature, e
 
 // ProcessSource dispatches to the appropriate handler based on source type.
 // Returns the latest version/cursor string processed (for updating sources.yaml).
-func ProcessSource(src Source, repo string, dryRun bool) (string, error) {
+func ProcessSource(ctx context.Context, src Source, repo string, dryRun bool) (string, error) {
 	slog.Info("processing source", "name", src.Name, "type", src.Type, "url", src.URL, "last_version", src.LastVersion)
 
 	switch src.Type {
 	case "issues", "pulls":
-		return processGitHubItems(src, repo, dryRun)
+		return processGitHubItems(ctx, src, repo, dryRun)
 	default:
-		return processChangelog(src, repo, dryRun)
+		return processChangelog(ctx, src, repo, dryRun)
 	}
 }
 
 // processChangelog handles changelog-type sources (original behavior).
-func processChangelog(src Source, repo string, dryRun bool) (string, error) {
+func processChangelog(ctx context.Context, src Source, repo string, dryRun bool) (string, error) {
 	content, err := ingest.FetchChangelog(src.URL)
 	if err != nil {
 		return "", fmt.Errorf("fetching changelog for %s: %w", src.Name, err)
@@ -124,7 +124,7 @@ func processChangelog(src Source, repo string, dryRun bool) (string, error) {
 	}
 
 	sourceRef := fmt.Sprintf("%s (%s)", src.URL, strings.Join(newVersions, ", "))
-	features, err := ExtractFeatures(src.Type, sourceRef, combined.String())
+	features, err := ExtractFeatures(ctx, src.Type, sourceRef, combined.String())
 	if err != nil {
 		return "", fmt.Errorf("extracting features for %s: %w", src.Name, err)
 	}
@@ -134,7 +134,7 @@ func processChangelog(src Source, repo string, dryRun bool) (string, error) {
 }
 
 // processGitHubItems handles issues and pulls source types.
-func processGitHubItems(src Source, repo string, dryRun bool) (string, error) {
+func processGitHubItems(ctx context.Context, src Source, repo string, dryRun bool) (string, error) {
 	sourceRepo := src.Repo
 	if sourceRepo == "" {
 		return "", fmt.Errorf("source %s has type %q but no repo field", src.Name, src.Type)
@@ -187,7 +187,7 @@ func processGitHubItems(src Source, repo string, dryRun bool) (string, error) {
 	}
 
 	sourceRef := fmt.Sprintf("%s/%s (%s)", sourceRepo, src.Type, src.Name)
-	features, err := ExtractFeatures(src.Type, sourceRef, content.String())
+	features, err := ExtractFeatures(ctx, src.Type, sourceRef, content.String())
 	if err != nil {
 		return "", fmt.Errorf("extracting features for %s: %w", src.Name, err)
 	}

@@ -22,6 +22,8 @@ func newProposeCmd() *cobra.Command {
 		Short: "Check changelogs and create proposal issues",
 		Long:  `Scans monitored changelog sources for new versions, extracts features via Claude, and creates proposal issues on GitHub.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
 			if sourcesFile == "" {
 				// Default: sources.yaml in the minions repo root
 				sourcesFile = filepath.Join(cfg.WorkspaceRoot, "minions", "sources.yaml")
@@ -41,7 +43,7 @@ func newProposeCmd() *cobra.Command {
 					continue
 				}
 
-				latestVersion, err := propose.ProcessSource(src, issueRepo, dryRun)
+				latestVersion, err := propose.ProcessSource(ctx, src, issueRepo, dryRun)
 				if err != nil {
 					slog.Error("processing source failed", "source", src.Name, "error", err)
 					continue

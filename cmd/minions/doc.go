@@ -21,6 +21,8 @@ func newDocCmd() *cobra.Command {
 		Short: "Generate a docs PR for an existing code PR",
 		Long:  `Automatically generates a documentation update PR based on changes in a source PR.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
 			if prRef == "" {
 				return fmt.Errorf("--pr is required (e.g., --pr partio-io/cli#42)")
 			}
@@ -89,7 +91,7 @@ func newDocCmd() *cobra.Command {
 				DryRun:         dryRun,
 			}
 
-			result, err := pipeline.Execute(def)
+			result, err := pipeline.Execute(ctx, def)
 			if err != nil {
 				return err
 			}

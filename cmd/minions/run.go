@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -37,6 +38,8 @@ Examples:
   minions run --agent readme-updater --pr partio-io/app#42`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
 			if cfg.DryRun {
 				dryRun = true
 			}
@@ -52,7 +55,7 @@ Examples:
 
 			// Agent mode: --agent flag specified
 			if agentName != "" {
-				return runAgent(agentName, prRef, contextJSON, workspaceRoot, dryRun)
+				return runAgent(ctx, agentName, prRef, contextJSON, workspaceRoot, dryRun)
 			}
 
 			// Task mode: path argument required
@@ -60,7 +63,7 @@ Examples:
 				return fmt.Errorf("either a task path or --agent is required")
 			}
 
-			return runTasks(args[0], workspaceRoot, dryRun, parallel)
+			return runTasks(ctx, args[0], workspaceRoot, dryRun, parallel)
 		},
 	}
 
@@ -74,7 +77,7 @@ Examples:
 }
 
 // runTasks executes task YAML files using the task-runner pipeline.
-func runTasks(target, workspaceRoot string, dryRun bool, parallel int) error {
+func runTasks(ctx context.Context, target, workspaceRoot string, dryRun bool, parallel int) error {
 	var tasks []*task.Task
 	info, err := os.Stat(target)
 	if err != nil {
@@ -107,13 +110,13 @@ func runTasks(target, workspaceRoot string, dryRun bool, parallel int) error {
 	var failed bool
 	if parallel <= 1 {
 		for _, t := range tasks {
-			if err := executeTask(t, workspaceRoot, dryRun); err != nil {
+			if err := executeTask(ctx, t, workspaceRoot, dryRun); err != nil {
 				slog.Error("task failed", "task", t.ID, "error", err)
 				failed = true
 			}
 		}
 	} else {
-		failed = runParallel(tasks, workspaceRoot, dryRun, parallel)
+		failed = runParallel(ctx, tasks, workspaceRoot, dryRun, parallel)
 	}
 
 	fmt.Println("==========================================")
@@ -126,7 +129,7 @@ func runTasks(target, workspaceRoot string, dryRun bool, parallel int) error {
 	return nil
 }
 
-func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
+func executeTask(ctx context.Context, t *task.Task, workspaceRoot string, dryRun bool) error {
 	fmt.Println("==========================================")
 	fmt.Printf("TASK: %s\n", t.ID)
 	fmt.Printf("TITLE: %s\n", t.Title)
@@ -166,7 +169,7 @@ func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
 		DebugDir:        debugDirForTask(t.ID),
 	}
 
-	result, err := pipeline.Execute(def)
+	result, err := pipeline.Execute(ctx, def)
 	if err != nil {
 		return err
 	}
@@ -179,7 +182,7 @@ func executeTask(t *task.Task, workspaceRoot string, dryRun bool) error {
 }
 
 // runAgent loads an agent definition and executes it.
-func runAgent(agentName, prRef, contextJSON, workspaceRoot string, dryRun bool) error {
+func runAgent(ctx context.Context, agentName, prRef, contextJSON, workspaceRoot string, dryRun bool) error {
 	agentDef, err := agent.Load(agentName)
 	if err != nil {
 		return err
@@ -289,7 +292,7 @@ func runAgent(agentName, prRef, contextJSON, workspaceRoot string, dryRun bool) 
 		return err
 	}
 
-	result, err := pipeline.Execute(*def)
+	result, err := pipeline.Execute(ctx, *def)
 	if err != nil {
 		return err
 	}
@@ -311,7 +314,7 @@ func debugDirForTask(taskID string) string {
 	return dir
 }
 
-func runParallel(tasks []*task.Task, workspaceRoot string, dryRun bool, maxParallel int) bool {
+func runParallel(ctx context.Context, tasks []*task.Task, workspaceRoot string, dryRun bool, maxParallel int) bool {
 	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -325,7 +328,7 @@ func runParallel(tasks []*task.Task, workspaceRoot string, dryRun bool, maxParal
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			if err := executeTask(t, workspaceRoot, dryRun); err != nil {
+			if err := executeTask(ctx, t, workspaceRoot, dryRun); err != nil {
 				slog.Error("task failed", "task", t.ID, "error", err)
 				mu.Lock()
 				failed = true
