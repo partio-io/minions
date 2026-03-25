@@ -121,7 +121,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.26"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -215,6 +215,29 @@ jobs:
           GH_TOKEN: ${{ secrets.PARTIO_PAT }}
           ISSUE_TITLE_ENV: ${{ github.event.issue.title }}
 
+      # Extract plan from issue comments (if available)
+      - name: Extract plan
+        id: plan
+        if: steps.task.outputs.issue_num != ''
+        env:
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+        run: |
+          ISSUE_NUM="${{ steps.task.outputs.issue_num }}"
+          PLAN_FILE="${{ github.workspace }}/minion-plan.md"
+
+          # Fetch the latest "## Minion Plan" comment
+          PLAN_BODY=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUM}/comments" \
+            --jq '[.[] | select(.body | contains("## Minion Plan"))] | last | .body // empty')
+
+          if [ -n "$PLAN_BODY" ]; then
+            echo "$PLAN_BODY" > "$PLAN_FILE"
+            echo "plan_file=${PLAN_FILE}" >> "$GITHUB_OUTPUT"
+            echo "Plan found, will be included as execution context"
+          else
+            echo "plan_file=" >> "$GITHUB_OUTPUT"
+            echo "No plan comment found, proceeding without plan"
+          fi
+
       # Run the minion
       - name: Execute minion
         id: execute
@@ -231,6 +254,9 @@ jobs:
             ARGS="${ARGS} --dry-run"
           fi
           ARGS="${ARGS} --parallel ${{ steps.task.outputs.parallel }}"
+          if [ -n "${{ steps.plan.outputs.plan_file }}" ]; then
+            ARGS="${ARGS} --plan-file ${{ steps.plan.outputs.plan_file }}"
+          fi
           ./minions $ARGS
 
       - name: Upload debug artifacts

@@ -28,6 +28,7 @@ type Feature struct {
 	TargetRepos        []string `json:"target_repos" yaml:"target_repos"`
 	ContextHints       []string `json:"context_hints" yaml:"context_hints"`
 	AcceptanceCriteria []string `json:"acceptance_criteria" yaml:"acceptance_criteria"`
+	Plan               bool     `json:"plan,omitempty" yaml:"plan,omitempty"`
 }
 
 // GenerateTasks sends content to Claude for feature extraction and writes task YAML files.
@@ -97,6 +98,7 @@ type taskFileData struct {
 	ContextHints       []string `yaml:"context_hints"`
 	AcceptanceCriteria []string `yaml:"acceptance_criteria"`
 	PRLabels           []string `yaml:"pr_labels"`
+	Plan               bool     `yaml:"plan,omitempty"`
 }
 
 func writeTaskFile(f Feature, sourceType, outputDir string) error {
@@ -112,6 +114,7 @@ func writeTaskFile(f Feature, sourceType, outputDir string) error {
 		ContextHints:       f.ContextHints,
 		AcceptanceCriteria: f.AcceptanceCriteria,
 		PRLabels:           []string{"minion", "feature"},
+		Plan:               f.Plan,
 	}
 
 	out, err := yaml.Marshal(&data)

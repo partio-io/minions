@@ -25,6 +25,7 @@ func newRunCmd() *cobra.Command {
 	var agentName string
 	var prRef string
 	var contextJSON string
+	var planFile string
 
 	cmd := &cobra.Command{
 		Use:   "run [path]",
@@ -63,7 +64,17 @@ Examples:
 				return fmt.Errorf("either a task path or --agent is required")
 			}
 
-			return runTasks(ctx, args[0], workspaceRoot, dryRun, parallel)
+			// Load plan text if provided
+			var planText string
+			if planFile != "" {
+				data, err := os.ReadFile(planFile)
+				if err != nil {
+					return fmt.Errorf("reading plan file: %w", err)
+				}
+				planText = string(data)
+			}
+
+			return runTasks(ctx, args[0], workspaceRoot, dryRun, parallel, planText)
 		},
 	}
 
@@ -72,12 +83,13 @@ Examples:
 	cmd.Flags().StringVar(&agentName, "agent", "", "agent type to run (e.g., doc-updater, readme-updater)")
 	cmd.Flags().StringVar(&prRef, "pr", "", "PR reference for PR-triggered agents (e.g., partio-io/cli#42)")
 	cmd.Flags().StringVar(&contextJSON, "context", "", "JSON context for the agent")
+	cmd.Flags().StringVar(&planFile, "plan-file", "", "path to a plan file to include as context")
 
 	return cmd
 }
 
 // runTasks executes task YAML files using the task-runner pipeline.
-func runTasks(ctx context.Context, target, workspaceRoot string, dryRun bool, parallel int) error {
+func runTasks(ctx context.Context, target, workspaceRoot string, dryRun bool, parallel int, planText string) error {
 	var tasks []*task.Task
 	info, err := os.Stat(target)
 	if err != nil {
@@ -110,13 +122,13 @@ func runTasks(ctx context.Context, target, workspaceRoot string, dryRun bool, pa
 	var failed bool
 	if parallel <= 1 {
 		for _, t := range tasks {
-			if err := executeTask(ctx, t, workspaceRoot, dryRun); err != nil {
+			if err := executeTask(ctx, t, workspaceRoot, dryRun, planText); err != nil {
 				slog.Error("task failed", "task", t.ID, "error", err)
 				failed = true
 			}
 		}
 	} else {
-		failed = runParallel(ctx, tasks, workspaceRoot, dryRun, parallel)
+		failed = runParallel(ctx, tasks, workspaceRoot, dryRun, parallel, planText)
 	}
 
 	fmt.Println("==========================================")
@@ -129,7 +141,7 @@ func runTasks(ctx context.Context, target, workspaceRoot string, dryRun bool, pa
 	return nil
 }
 
-func executeTask(ctx context.Context, t *task.Task, workspaceRoot string, dryRun bool) error {
+func executeTask(ctx context.Context, t *task.Task, workspaceRoot string, dryRun bool, planText string) error {
 	fmt.Println("==========================================")
 	fmt.Printf("TASK: %s\n", t.ID)
 	fmt.Printf("TITLE: %s\n", t.Title)
@@ -155,6 +167,7 @@ func executeTask(ctx context.Context, t *task.Task, workspaceRoot string, dryRun
 		WorkspaceRoot:   workspaceRoot,
 		TargetRepos:     t.TargetRepos,
 		PromptText:      taskPrompt,
+		PlanText:        planText,
 		MaxTurns:        cfg.MaxTurns,
 		AllowedTools:    "Edit,Write,Read,Glob,Grep,Bash",
 		RunChecks:       true,
@@ -314,7 +327,7 @@ func debugDirForTask(taskID string) string {
 	return dir
 }
 
-func runParallel(ctx context.Context, tasks []*task.Task, workspaceRoot string, dryRun bool, maxParallel int) bool {
+func runParallel(ctx context.Context, tasks []*task.Task, workspaceRoot string, dryRun bool, maxParallel int, planText string) bool {
 	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -328,7 +341,7 @@ func runParallel(ctx context.Context, tasks []*task.Task, workspaceRoot string, 
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			if err := executeTask(ctx, t, workspaceRoot, dryRun); err != nil {
+			if err := executeTask(ctx, t, workspaceRoot, dryRun, planText); err != nil {
 				slog.Error("task failed", "task", t.ID, "error", err)
 				mu.Lock()
 				failed = true
