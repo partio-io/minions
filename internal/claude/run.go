@@ -47,7 +47,6 @@ func Run(ctx context.Context, opts Opts) (*Result, error) {
 		claudesdk.WithCwd(opts.CWD),
 		claudesdk.WithMaxTurns(opts.MaxTurns),
 		claudesdk.WithAllowedTools(tools...),
-		claudesdk.WithPermissionMode("bypassPermissions"),
 	}
 
 	slog.Info("running claude", "cwd", opts.CWD, "max_turns", opts.MaxTurns)

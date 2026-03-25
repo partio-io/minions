@@ -1,0 +1,141 @@
+name: Plan Minion Task
+
+on:
+  # Trigger when minion-planning label is added
+  issues:
+    types: [labeled]
+
+  # Trigger on /minion replan comment
+  issue_comment:
+    types: [created]
+
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to plan for"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  plan:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && github.event.label.name == 'minion-planning') ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/minion replan'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check authorization
+        env:
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+        run: |
+          ROLE=$(gh api "orgs/partio-io/memberships/${{ github.actor }}" --jq '.role' 2>/dev/null || echo "none")
+          if [ "$ROLE" != "admin" ]; then
+            echo "::error::Unauthorized: ${{ github.actor }} (role: ${ROLE}) is not a partio-io org admin"
+            exit 1
+          fi
+
+      - name: Determine issue number
+        id: issue
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "number=${{ inputs.issue_number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Acknowledge replan request
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+        run: |
+          ISSUE_NUM="${{ steps.issue.outputs.number }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue comment "$ISSUE_NUM" --repo "${{ github.repository }}" \
+            --body "Minion re-planning triggered. [View workflow run](${RUN_URL})"
+
+      # Checkout all repos side-by-side
+      - name: Checkout minions
+        uses: actions/checkout@v4
+        with:
+          repository: partio-io/minions
+          path: minions
+
+      - name: Checkout cli
+        uses: actions/checkout@v4
+        with:
+          repository: partio-io/cli
+          path: cli
+          token: ${{ secrets.PARTIO_PAT }}
+
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          repository: partio-io/app
+          path: app
+          token: ${{ secrets.PARTIO_PAT }}
+
+      - name: Checkout docs
+        uses: actions/checkout@v4
+        with:
+          repository: partio-io/docs
+          path: docs
+          token: ${{ secrets.PARTIO_PAT }}
+
+      - name: Checkout site
+        uses: actions/checkout@v4
+        with:
+          repository: partio-io/site
+          path: site
+          token: ${{ secrets.PARTIO_PAT }}
+
+      - name: Checkout extension
+        uses: actions/checkout@v4
+        with:
+          repository: partio-io/extension
+          path: extension
+          token: ${{ secrets.PARTIO_PAT }}
+
+      # Install toolchains
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build minions
+        run: cd minions && make build
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      # Run plan
+      - name: Generate plan
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+          WORKSPACE_ROOT: ${{ github.workspace }}
+        run: |
+          cd minions
+          ./minions plan --issue ${{ steps.issue.outputs.number }} --repo "${{ github.repository }}"
+
+      # On failure: comment with logs link
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+        run: |
+          ISSUE_NUM="${{ steps.issue.outputs.number }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue comment "$ISSUE_NUM" --repo "${{ github.repository }}" \
+            --body "Minion planning failed. [View logs](${RUN_URL})"

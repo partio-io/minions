@@ -28,6 +28,7 @@ type Def struct {
 
 	// Claude invocation
 	PromptText   string
+	PlanText     string // if set, prepended to prompt as implementation plan context
 	MaxTurns     int
 	AllowedTools string // comma-separated, e.g. "Edit,Write,Read,Glob,Grep,Bash"
 
@@ -148,6 +149,11 @@ func Execute(ctx context.Context, def Def) (*Result, error) {
 		claudeCWD = worktreePaths[0]
 	}
 
+	// Prepend plan context if available
+	if def.PlanText != "" {
+		def.PromptText = "## Implementation Plan\n\nFollow this plan that was reviewed and approved:\n\n" + def.PlanText + "\n\n---\n\n" + def.PromptText
+	}
+
 	// Run Claude
 	fmt.Println("--- Running Claude Code ---")
 	var logFile string
@@ -162,8 +168,12 @@ func Execute(ctx context.Context, def Def) (*Result, error) {
 		LogFile:      logFile,
 	})
 	if err != nil {
-		slog.Warn("claude exited with error", "error", err)
-	} else if result.IsError {
+		// Process crashed entirely — no result, no changes possible
+		cleanup()
+		return nil, fmt.Errorf("claude failed: %w", err)
+	}
+	if result.IsError {
+		// Claude returned an error (e.g., max turns exceeded) but may have produced changes
 		slog.Warn("claude returned error result", "subtype", result.Subtype)
 	}
 
@@ -221,7 +231,7 @@ func Execute(ctx context.Context, def Def) (*Result, error) {
 				LogFile:      retryLogFile,
 			})
 			if retryErr != nil {
-				slog.Warn("claude retry exited with error", "error", retryErr)
+				slog.Error("claude retry failed", "error", retryErr)
 			} else if retryResult.IsError {
 				slog.Warn("claude retry returned error result", "subtype", retryResult.Subtype)
 			}

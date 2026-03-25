@@ -16,6 +16,7 @@ type Task struct {
 	AcceptanceCriteria []string `yaml:"acceptance_criteria"`
 	PRLabels           []string `yaml:"pr_labels"`
 	DependsOn          []string `yaml:"depends_on"`
+	Plan               bool     `yaml:"plan"`
 }
 
 // Validate checks that the task has all required fields.

@@ -25,71 +25,82 @@ func BuildTask(t *task.Task, workspaceRoot string) (string, error) {
 		return "", fmt.Errorf("loading prompt template: %w", err)
 	}
 
-	// Build target repos text
-	var reposBuilder strings.Builder
+	result := tmpl
+	result = strings.ReplaceAll(result, "{{TITLE}}", t.Title)
+	result = strings.ReplaceAll(result, "{{DESCRIPTION}}", t.Description)
+	result = strings.ReplaceAll(result, "{{TARGET_REPOS}}", buildTargetReposText(t))
+	result = strings.ReplaceAll(result, "{{ACCEPTANCE_CRITERIA}}", buildAcceptanceCriteriaText(t))
+	result = strings.ReplaceAll(result, "{{CLAUDE_MD_CONTENTS}}", buildClaudeMDText(t, workspaceRoot))
+	result = strings.ReplaceAll(result, "{{CONTEXT_HINTS_CONTENTS}}", buildContextHintsText(t, workspaceRoot))
+
+	return result, nil
+}
+
+// buildTargetReposText generates the target repos section.
+func buildTargetReposText(t *task.Task) string {
+	var b strings.Builder
 	for _, repo := range t.TargetRepos {
 		info, ok := repoBuildInfo[repo]
 		if !ok {
 			info = "Unknown repo type"
 		}
-		fmt.Fprintf(&reposBuilder, "- `%s/` — %s\n", repo, info)
+		fmt.Fprintf(&b, "- `%s/` — %s\n", repo, info)
 	}
+	return b.String()
+}
 
-	// Build acceptance criteria text
-	var criteriaBuilder strings.Builder
+// buildAcceptanceCriteriaText generates the acceptance criteria section.
+func buildAcceptanceCriteriaText(t *task.Task) string {
+	var b strings.Builder
 	for _, c := range t.AcceptanceCriteria {
-		fmt.Fprintf(&criteriaBuilder, "- %s\n", c)
+		fmt.Fprintf(&b, "- %s\n", c)
 	}
+	return b.String()
+}
 
-	// Build CLAUDE.md contents
-	var claudeMDBuilder strings.Builder
+// buildClaudeMDText reads and formats CLAUDE.md files from target repos.
+func buildClaudeMDText(t *task.Task, workspaceRoot string) string {
+	var b strings.Builder
 	for _, repo := range t.TargetRepos {
 		claudePath := filepath.Join(workspaceRoot, repo, "CLAUDE.md")
 		data, err := os.ReadFile(claudePath)
 		if err != nil {
 			continue
 		}
-		fmt.Fprintf(&claudeMDBuilder, "### %s/CLAUDE.md\n```\n%s\n```\n\n", repo, strings.TrimSpace(string(data)))
+		fmt.Fprintf(&b, "### %s/CLAUDE.md\n```\n%s\n```\n\n", repo, strings.TrimSpace(string(data)))
 	}
+	return b.String()
+}
 
-	// Build context hints contents
-	var hintsBuilder strings.Builder
+// buildContextHintsText reads and formats context hint files/directories.
+func buildContextHintsText(t *task.Task, workspaceRoot string) string {
+	var b strings.Builder
 	for _, hint := range t.ContextHints {
 		hintPath := filepath.Join(workspaceRoot, hint)
 		info, err := os.Stat(hintPath)
 		if err != nil {
-			fmt.Fprintf(&hintsBuilder, "### %s\n*(file not found)*\n\n", hint)
+			fmt.Fprintf(&b, "### %s\n*(file not found)*\n\n", hint)
 			continue
 		}
 		if info.IsDir() {
 			entries, err := os.ReadDir(hintPath)
 			if err != nil {
-				fmt.Fprintf(&hintsBuilder, "### %s (directory listing)\n```\n(error reading directory)\n```\n\n", hint)
+				fmt.Fprintf(&b, "### %s (directory listing)\n```\n(error reading directory)\n```\n\n", hint)
 				continue
 			}
 			var listing strings.Builder
 			for _, e := range entries {
 				fmt.Fprintln(&listing, e.Name())
 			}
-			fmt.Fprintf(&hintsBuilder, "### %s (directory listing)\n```\n%s```\n\n", hint, listing.String())
+			fmt.Fprintf(&b, "### %s (directory listing)\n```\n%s```\n\n", hint, listing.String())
 		} else {
 			data, err := os.ReadFile(hintPath)
 			if err != nil {
-				fmt.Fprintf(&hintsBuilder, "### %s\n*(error reading file)*\n\n", hint)
+				fmt.Fprintf(&b, "### %s\n*(error reading file)*\n\n", hint)
 				continue
 			}
-			fmt.Fprintf(&hintsBuilder, "### %s\n```\n%s\n```\n\n", hint, strings.TrimSpace(string(data)))
+			fmt.Fprintf(&b, "### %s\n```\n%s\n```\n\n", hint, strings.TrimSpace(string(data)))
 		}
 	}
-
-	// Perform substitutions
-	result := tmpl
-	result = strings.ReplaceAll(result, "{{TITLE}}", t.Title)
-	result = strings.ReplaceAll(result, "{{DESCRIPTION}}", t.Description)
-	result = strings.ReplaceAll(result, "{{TARGET_REPOS}}", reposBuilder.String())
-	result = strings.ReplaceAll(result, "{{ACCEPTANCE_CRITERIA}}", criteriaBuilder.String())
-	result = strings.ReplaceAll(result, "{{CLAUDE_MD_CONTENTS}}", claudeMDBuilder.String())
-	result = strings.ReplaceAll(result, "{{CONTEXT_HINTS_CONTENTS}}", hintsBuilder.String())
-
-	return result, nil
+	return b.String()
 }

@@ -64,14 +64,20 @@ func IssueExists(repo, featureID string) (bool, error) {
 }
 
 // CreateProposalIssue creates a GitHub issue with the minion-proposal label.
+// If the feature has Plan: true, the minion-planning label is also added to trigger plan generation.
 func CreateProposalIssue(repo string, f ingest.Feature, sourceName, sourceType, sourceRepo string) (string, error) {
 	title := f.Title
 	body := FormatIssueBody(f, sourceName, sourceType, sourceRepo)
 
+	labels := "minion-proposal"
+	if f.Plan {
+		labels = "minion-proposal,minion-planning"
+	}
+
 	cmd := exec.Command("gh", "issue", "create",
 		"--repo", repo,
 		"--title", title,
-		"--label", "minion-proposal",
+		"--label", labels,
 		"--body", body,
 	)
 	out, err := cmd.CombinedOutput()
@@ -151,6 +157,7 @@ func embedTaskYAML(f ingest.Feature, sourceType string) string {
 		ContextHints       []string `yaml:"context_hints"`
 		AcceptanceCriteria []string `yaml:"acceptance_criteria"`
 		PRLabels           []string `yaml:"pr_labels"`
+		Plan               bool     `yaml:"plan,omitempty"`
 	}{
 		ID:                 f.ID,
 		Title:              f.Title,
@@ -163,6 +170,7 @@ func embedTaskYAML(f ingest.Feature, sourceType string) string {
 		ContextHints:       f.ContextHints,
 		AcceptanceCriteria: f.AcceptanceCriteria,
 		PRLabels:           []string{"minion", "feature"},
+		Plan:               f.Plan,
 	}
 
 	data, err := yaml.Marshal(&task)
