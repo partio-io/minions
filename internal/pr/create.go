@@ -10,9 +10,15 @@ import (
 	"github.com/partio-io/minions/internal/git"
 )
 
+// CreateOpts holds optional fields for PR creation.
+type CreateOpts struct {
+	Source             string   // e.g., "partio-io/minions#3" — referenced in PR body
+	AcceptanceCriteria []string // listed in PR body
+}
+
 // Create stages, commits, pushes, and creates a PR for a minion's work.
 // Returns the PR URL or empty string if no changes.
-func Create(worktreePath, repoFullName, taskID, title, description, why string, labels []string) (string, error) {
+func Create(worktreePath, repoFullName, taskID, title, description, why string, labels []string, opts *CreateOpts) (string, error) {
 	// Check for changes
 	status, _ := git.ExecGitDir(worktreePath, "status", "--porcelain")
 	if strings.TrimSpace(status) == "" {
@@ -39,24 +45,43 @@ func Create(worktreePath, repoFullName, taskID, title, description, why string, 
 	}
 
 	// Build gh pr create command
-	var prBody string
+	var bodyBuilder strings.Builder
+
 	if description != "" {
-		var bodyBuilder strings.Builder
 		bodyBuilder.WriteString("## Objective\n\n")
 		bodyBuilder.WriteString(description)
 		bodyBuilder.WriteString("\n\n")
-		if why != "" {
-			bodyBuilder.WriteString("## Why\n\n")
-			bodyBuilder.WriteString(why)
-			bodyBuilder.WriteString("\n\n")
-		}
-		bodyBuilder.WriteString("---\n\n")
-		bodyBuilder.WriteString(fmt.Sprintf("Automated PR by [partio-io/minions](https://github.com/partio-io/minions) · Task: `%s`\n\n", taskID))
-		bodyBuilder.WriteString("*Created by an unattended coding agent. Please review carefully.*")
-		prBody = bodyBuilder.String()
-	} else {
-		prBody = fmt.Sprintf("Automated PR by [partio-io/minions](https://github.com/partio-io/minions) · Task: `%s`\n\n*Created by an unattended coding agent. Please review carefully.*", taskID)
 	}
+
+	if why != "" {
+		bodyBuilder.WriteString("## Why\n\n")
+		bodyBuilder.WriteString(why)
+		bodyBuilder.WriteString("\n\n")
+	}
+
+	if opts != nil && len(opts.AcceptanceCriteria) > 0 {
+		bodyBuilder.WriteString("## Acceptance Criteria\n\n")
+		for _, c := range opts.AcceptanceCriteria {
+			fmt.Fprintf(&bodyBuilder, "- [ ] %s\n", c)
+		}
+		bodyBuilder.WriteString("\n")
+	}
+
+	if opts != nil && opts.Source != "" {
+		bodyBuilder.WriteString("## Source\n\n")
+		// If it looks like an issue ref (org/repo#N), link to it
+		if strings.Contains(opts.Source, "#") {
+			fmt.Fprintf(&bodyBuilder, "Resolves %s\n\n", opts.Source)
+		} else {
+			fmt.Fprintf(&bodyBuilder, "%s\n\n", opts.Source)
+		}
+	}
+
+	bodyBuilder.WriteString("---\n\n")
+	fmt.Fprintf(&bodyBuilder, "Automated PR by [partio-io/minions](https://github.com/partio-io/minions) · Task: `%s`\n\n", taskID)
+	bodyBuilder.WriteString("*Created by an unattended coding agent. Please review carefully.*")
+
+	prBody := bodyBuilder.String()
 
 	// Ensure labels exist in target repo (ignore errors for already-existing labels)
 	for _, l := range labels {

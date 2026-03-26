@@ -175,10 +175,12 @@ func executeTask(ctx context.Context, t *task.Task, workspaceRoot string, dryRun
 		RetryMaxTurns:   15,
 		CreatePR:        true,
 		PRLabels:        labels,
-		TaskTitle:       t.Title,
-		TaskDescription: t.Description,
-		TaskWhy:         t.Why,
-		DryRun:          dryRun,
+		TaskTitle:          t.Title,
+		TaskDescription:    t.Description,
+		TaskWhy:            t.Why,
+		TaskSource:         t.Source,
+		AcceptanceCriteria: t.AcceptanceCriteria,
+		DryRun:             dryRun,
 		DebugDir:        debugDirForTask(t.ID),
 	}
 
