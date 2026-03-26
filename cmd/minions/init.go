@@ -140,6 +140,11 @@ jobs:
             gh repo clone "$FULL" "$SHORT" -- --depth=1
           done
 
+      - name: Configure git auth
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
