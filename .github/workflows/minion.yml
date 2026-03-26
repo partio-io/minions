@@ -47,9 +47,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PARTIO_PAT }}
         run: |
-          ROLE=$(gh api "orgs/partio-io/memberships/${{ github.actor }}" --jq '.role' 2>/dev/null || echo "none")
+          # Read org from project config after checkout, or fall back to repo owner
+          ORG=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          ROLE=$(gh api "orgs/${ORG}/memberships/${{ github.actor }}" --jq '.role' 2>/dev/null || echo "none")
           if [ "$ROLE" != "admin" ]; then
-            echo "::error::Unauthorized: ${{ github.actor }} (role: ${ROLE}) is not a partio-io org admin"
+            echo "::error::Unauthorized: ${{ github.actor }} (role: ${ROLE}) is not an org admin"
             exit 1
           fi
           echo "Authorized: ${{ github.actor }} (org role: ${ROLE})"
@@ -60,11 +62,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PARTIO_PAT }}
         run: |
-          if [ "${{ github.event_name }}" = "issue_comment" ]; then
-            ISSUE_NUM="${{ github.event.issue.number }}"
-          else
-            ISSUE_NUM="${{ github.event.issue.number }}"
-          fi
+          ISSUE_NUM="${{ github.event.issue.number }}"
 
           # Skip if already executing (dedup)
           LABELS=$(gh issue view "$ISSUE_NUM" --repo "${{ github.repository }}" --json labels -q '.labels[].name')
@@ -75,47 +73,29 @@ jobs:
 
           gh issue edit "$ISSUE_NUM" --repo "${{ github.repository }}" --add-label "minion-executing"
 
-      # Checkout all repos side-by-side
+      # Checkout principal repo
       - name: Checkout minions
         uses: actions/checkout@v4
         with:
-          repository: partio-io/minions
           path: minions
 
-      - name: Checkout cli
-        uses: actions/checkout@v4
-        with:
-          repository: partio-io/cli
-          path: cli
-          token: ${{ secrets.PARTIO_PAT }}
+      # Install yq for parsing project.yaml
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
 
-      - name: Checkout app
-        uses: actions/checkout@v4
-        with:
-          repository: partio-io/app
-          path: app
-          token: ${{ secrets.PARTIO_PAT }}
-
-      - name: Checkout docs
-        uses: actions/checkout@v4
-        with:
-          repository: partio-io/docs
-          path: docs
-          token: ${{ secrets.PARTIO_PAT }}
-
-      - name: Checkout site
-        uses: actions/checkout@v4
-        with:
-          repository: partio-io/site
-          path: site
-          token: ${{ secrets.PARTIO_PAT }}
-
-      - name: Checkout extension
-        uses: actions/checkout@v4
-        with:
-          repository: partio-io/extension
-          path: extension
-          token: ${{ secrets.PARTIO_PAT }}
+      # Dynamically checkout all repos defined in project.yaml
+      - name: Checkout project repos
+        env:
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+        run: |
+          for ENTRY in $(yq -r '.repos[] | .full_name + ":" + .name' minions/.minions/project.yaml); do
+            FULL="${ENTRY%%:*}"
+            SHORT="${ENTRY##*:}"
+            echo "Cloning ${FULL} -> ${SHORT}/"
+            gh repo clone "$FULL" "$SHORT" -- --depth=1
+          done
 
       # Install toolchains
       - name: Setup Go

@@ -104,6 +104,7 @@ Examples:
 				MaxTurns:      15,
 				Feedback:      feedback,
 				PreviousPlan:  previousPlan,
+				Project:       proj,
 			})
 			if err != nil {
 				return fmt.Errorf("plan generation failed: %w", err)
@@ -279,5 +280,5 @@ func updatePlanLabels(repo string, issueNum int) error {
 
 // buildPlanPromptForDryRun generates the plan prompt for --dry-run output.
 func buildPlanPromptForDryRun(t *task.Task, workspaceRoot, feedback, previousPlan string) (string, error) {
-	return prompt.BuildPlan(t, workspaceRoot, feedback, previousPlan)
+	return prompt.BuildPlan(t, workspaceRoot, feedback, previousPlan, proj)
 }

@@ -26,15 +26,22 @@ jobs:
       - name: Checkout minions
         uses: actions/checkout@v4
         with:
-          repository: partio-io/minions
           path: minions
 
-      - name: Checkout docs
-        uses: actions/checkout@v4
-        with:
-          repository: partio-io/docs
-          path: docs
-          token: ${{ secrets.PARTIO_PAT }}
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Checkout project repos
+        env:
+          GH_TOKEN: ${{ secrets.PARTIO_PAT }}
+        run: |
+          for ENTRY in $(yq -r '.repos[] | .full_name + ":" + .name' minions/.minions/project.yaml); do
+            FULL="${ENTRY%%:*}"
+            SHORT="${ENTRY##*:}"
+            gh repo clone "$FULL" "$SHORT" -- --depth=1
+          done
 
       - name: Setup Go
         uses: actions/setup-go@v5

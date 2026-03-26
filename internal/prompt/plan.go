@@ -4,19 +4,21 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/partio-io/minions/internal/project"
 	"github.com/partio-io/minions/internal/task"
 )
 
 // BuildPlan constructs a plan-mode prompt from a task spec.
 // If feedback and previousPlan are provided (replan), they are included as context.
-func BuildPlan(t *task.Task, workspaceRoot, feedback, previousPlan string) (string, error) {
+// proj may be nil for backward compatibility.
+func BuildPlan(t *task.Task, workspaceRoot, feedback, previousPlan string, proj *project.Project) (string, error) {
 	tmpl, err := Template("plan-prompt.md")
 	if err != nil {
 		return "", fmt.Errorf("loading plan prompt template: %w", err)
 	}
 
 	// Reuse shared context builders
-	reposText := buildTargetReposText(t)
+	reposText := buildTargetReposText(t, workspaceRoot, proj)
 	criteriaText := buildAcceptanceCriteriaText(t)
 	claudeMDText := buildClaudeMDText(t, workspaceRoot)
 	hintsText := buildContextHintsText(t, workspaceRoot)

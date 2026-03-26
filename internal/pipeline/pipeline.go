@@ -58,6 +58,10 @@ type Def struct {
 	SourcePRRepo   string
 	SourcePRNumber string
 
+	// Multi-repo resolution
+	FullNameFn    pr.FullNameFunc // resolves short repo name to full GitHub name
+	PrincipalRepo string         // full name of the principal repo (e.g. "partio-io/minions")
+
 	// Control
 	DryRun   bool
 	DebugDir string
@@ -259,11 +263,19 @@ func Execute(ctx context.Context, def Def) (*Result, error) {
 			if labelsCSV == "" {
 				labelsCSV = "minion"
 			}
+			fullNameFn := def.FullNameFn
+			if fullNameFn == nil {
+				fullNameFn = func(s string) string { return "partio-io/" + s }
+			}
+			principalRepo := def.PrincipalRepo
+			if principalRepo == "" {
+				principalRepo = "partio-io/minions"
+			}
 			prOpts := &pr.CreateOpts{
 				Source:             def.TaskSource,
 				AcceptanceCriteria: def.AcceptanceCriteria,
 			}
-			urls, err := pr.CreateAndLinkAll(def.TaskID, def.TaskTitle, def.TaskDescription, def.TaskWhy, def.WorkspaceRoot, labelsCSV, worktreeRepos, prOpts)
+			urls, err := pr.CreateAndLinkAll(def.TaskID, def.TaskTitle, def.TaskDescription, def.TaskWhy, def.WorkspaceRoot, labelsCSV, worktreeRepos, fullNameFn, principalRepo, prOpts)
 			if err != nil {
 				cleanup()
 				return nil, fmt.Errorf("PR creation failed: %w", err)

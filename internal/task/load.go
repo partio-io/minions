@@ -28,6 +28,36 @@ func LoadFile(path string) (*Task, error) {
 	return &t, nil
 }
 
+// LoadRepoTasks loads task YAML files from a repo's .minions/tasks/ directory.
+// Returns nil (not an error) if the directory doesn't exist.
+func LoadRepoTasks(repoPath string) ([]*Task, error) {
+	tasksDir := filepath.Join(repoPath, ".minions", "tasks")
+	if _, err := os.Stat(tasksDir); os.IsNotExist(err) {
+		return nil, nil
+	}
+	return LoadDir(tasksDir)
+}
+
+// DiscoverAll aggregates tasks from .minions/tasks/ across multiple repos.
+func DiscoverAll(workspaceRoot string, repos []string) ([]*Task, error) {
+	var all []*Task
+	for _, repo := range repos {
+		repoPath := filepath.Join(workspaceRoot, repo)
+		tasks, err := LoadRepoTasks(repoPath)
+		if err != nil {
+			return nil, fmt.Errorf("loading tasks from %s: %w", repo, err)
+		}
+		// Default target_repos to the repo itself if not specified
+		for _, t := range tasks {
+			if len(t.TargetRepos) == 0 {
+				t.TargetRepos = []string{repo}
+			}
+		}
+		all = append(all, tasks...)
+	}
+	return all, nil
+}
+
 // LoadDir loads all task YAML files from a directory, excluding the examples/ subdirectory.
 func LoadDir(dir string) ([]*Task, error) {
 	var files []string

@@ -3,12 +3,14 @@ package agent
 import (
 	"embed"
 	"fmt"
+	"os"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
 	appcontext "github.com/partio-io/minions/internal/context"
 	"github.com/partio-io/minions/internal/pipeline"
+	"github.com/partio-io/minions/internal/pr"
 	"github.com/partio-io/minions/internal/prompt"
 )
 
@@ -45,6 +47,23 @@ func Load(name string) (*Def, error) {
 		return nil, fmt.Errorf("parsing agent %q: %w", name, err)
 	}
 
+	return &def, nil
+}
+
+// LoadFromRepo loads an agent definition from a repo's .minions/agents/ directory.
+// Falls back to the embedded agent if not found in the repo.
+func LoadFromRepo(repoPath, name string) (*Def, error) {
+	path := repoPath + "/.minions/agents/" + name + ".yaml"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// Fall back to embedded
+		return Load(name)
+	}
+
+	var def Def
+	if err := yaml.Unmarshal(data, &def); err != nil {
+		return nil, fmt.Errorf("parsing repo agent %q: %w", name, err)
+	}
 	return &def, nil
 }
 
@@ -107,6 +126,8 @@ func BuildPipelineDef(agentDef *Def, vars map[string]string, opts PipelineOpts) 
 		TaskWhy:       opts.TaskWhy,
 		SourcePRRepo:   opts.SourcePRRepo,
 		SourcePRNumber: opts.SourcePRNumber,
+		FullNameFn:    opts.FullNameFn,
+		PrincipalRepo: opts.PrincipalRepo,
 		DryRun:        opts.DryRun,
 		DebugDir:      opts.DebugDir,
 	}
@@ -136,6 +157,10 @@ type PipelineOpts struct {
 	TaskWhy         string
 	SourcePRRepo    string
 	SourcePRNumber  string
+
+	// Multi-repo resolution
+	FullNameFn    pr.FullNameFunc // resolves short repo name to full GitHub name
+	PrincipalRepo string         // full name of principal repo
 
 	DryRun   bool
 	DebugDir string

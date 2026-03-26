@@ -11,6 +11,7 @@ type Config struct {
 	MaxTurns      int
 	DryRun        bool
 	LogLevel      string
+	ProjectFile   string // explicit path to .minions/project.yaml (from --project flag)
 }
 
 // Load reads configuration from environment variables with sensible defaults.

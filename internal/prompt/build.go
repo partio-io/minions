@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/partio-io/minions/internal/project"
+	"github.com/partio-io/minions/internal/repoconfig"
 	"github.com/partio-io/minions/internal/task"
 )
 
@@ -19,7 +21,8 @@ var repoBuildInfo = map[string]string{
 }
 
 // BuildTask constructs a full minion prompt from a task spec, CLAUDE.md files, and context hints.
-func BuildTask(t *task.Task, workspaceRoot string) (string, error) {
+// proj may be nil for backward compatibility.
+func BuildTask(t *task.Task, workspaceRoot string, proj *project.Project) (string, error) {
 	tmpl, err := Template("prompt.md")
 	if err != nil {
 		return "", fmt.Errorf("loading prompt template: %w", err)
@@ -28,7 +31,7 @@ func BuildTask(t *task.Task, workspaceRoot string) (string, error) {
 	result := tmpl
 	result = strings.ReplaceAll(result, "{{TITLE}}", t.Title)
 	result = strings.ReplaceAll(result, "{{DESCRIPTION}}", t.Description)
-	result = strings.ReplaceAll(result, "{{TARGET_REPOS}}", buildTargetReposText(t))
+	result = strings.ReplaceAll(result, "{{TARGET_REPOS}}", buildTargetReposText(t, workspaceRoot, proj))
 	result = strings.ReplaceAll(result, "{{ACCEPTANCE_CRITERIA}}", buildAcceptanceCriteriaText(t))
 	result = strings.ReplaceAll(result, "{{CLAUDE_MD_CONTENTS}}", buildClaudeMDText(t, workspaceRoot))
 	result = strings.ReplaceAll(result, "{{CONTEXT_HINTS_CONTENTS}}", buildContextHintsText(t, workspaceRoot))
@@ -37,16 +40,41 @@ func BuildTask(t *task.Task, workspaceRoot string) (string, error) {
 }
 
 // buildTargetReposText generates the target repos section.
-func buildTargetReposText(t *task.Task) string {
+// Resolution order for build info: repo .minions/repo.yaml > project.yaml > legacy hardcoded map.
+func buildTargetReposText(t *task.Task, workspaceRoot string, proj *project.Project) string {
 	var b strings.Builder
 	for _, repo := range t.TargetRepos {
-		info, ok := repoBuildInfo[repo]
-		if !ok {
-			info = "Unknown repo type"
-		}
+		info := resolveBuildInfo(repo, workspaceRoot, proj)
 		fmt.Fprintf(&b, "- `%s/` — %s\n", repo, info)
 	}
 	return b.String()
+}
+
+// resolveBuildInfo returns the build info for a repo, checking in order:
+// 1. Per-repo .minions/repo.yaml
+// 2. Project config
+// 3. Legacy hardcoded map
+func resolveBuildInfo(repo, workspaceRoot string, proj *project.Project) string {
+	// 1. Per-repo config
+	repoPath := filepath.Join(workspaceRoot, repo)
+	rc := repoconfig.LoadOrDefault(repoPath)
+	if rc.BuildInfo != "" {
+		return rc.BuildInfo
+	}
+
+	// 2. Project config
+	if proj != nil {
+		if info := proj.BuildInfo(repo); info != "" {
+			return info
+		}
+	}
+
+	// 3. Legacy hardcoded fallback
+	if info, ok := repoBuildInfo[repo]; ok {
+		return info
+	}
+
+	return "Unknown repo type"
 }
 
 // buildAcceptanceCriteriaText generates the acceptance criteria section.

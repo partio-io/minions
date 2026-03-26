@@ -28,9 +28,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PARTIO_PAT }}
         run: |
-          ROLE=$(gh api "orgs/partio-io/memberships/${{ github.actor }}" --jq '.role' 2>/dev/null || echo "none")
+          ORG=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          ROLE=$(gh api "orgs/${ORG}/memberships/${{ github.actor }}" --jq '.role' 2>/dev/null || echo "none")
           if [ "$ROLE" != "admin" ]; then
-            echo "::error::Unauthorized: ${{ github.actor }} (role: ${ROLE}) is not a partio-io org admin"
+            echo "::error::Unauthorized: ${{ github.actor }} (role: ${ROLE}) is not an org admin"
             exit 1
           fi
           echo "Authorized: ${{ github.actor }} (org role: ${ROLE})"
@@ -38,7 +39,6 @@ jobs:
       - name: Checkout minions
         uses: actions/checkout@v4
         with:
-          repository: partio-io/minions
           path: minions
 
       - name: Setup Go
