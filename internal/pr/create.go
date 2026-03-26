@@ -17,8 +17,9 @@ type CreateOpts struct {
 }
 
 // Create stages, commits, pushes, and creates a PR for a minion's work.
+// principalRepo is the full name of the principal repo (used in commit messages/PR bodies).
 // Returns the PR URL or empty string if no changes.
-func Create(worktreePath, repoFullName, taskID, title, description, why string, labels []string, opts *CreateOpts) (string, error) {
+func Create(worktreePath, repoFullName, taskID, title, description, why string, labels []string, principalRepo string, opts *CreateOpts) (string, error) {
 	// Check for changes
 	status, _ := git.ExecGitDir(worktreePath, "status", "--porcelain")
 	if strings.TrimSpace(status) == "" {
@@ -34,7 +35,7 @@ func Create(worktreePath, repoFullName, taskID, title, description, why string, 
 	}
 
 	// Commit
-	commitMsg := fmt.Sprintf("%s\n\nAutomated by partio-io/minions (task: %s)\n\nCo-Authored-By: Claude <noreply@anthropic.com>", title, taskID)
+	commitMsg := fmt.Sprintf("%s\n\nAutomated by %s (task: %s)\n\nCo-Authored-By: Claude <noreply@anthropic.com>", title, principalRepo, taskID)
 	if _, err := git.ExecGitDir(worktreePath, "commit", "-m", commitMsg); err != nil {
 		return "", fmt.Errorf("committing changes: %w", err)
 	}
@@ -44,7 +45,7 @@ func Create(worktreePath, repoFullName, taskID, title, description, why string, 
 		return "", fmt.Errorf("pushing branch: %w", err)
 	}
 
-	// Build gh pr create command
+	// Build PR body
 	var bodyBuilder strings.Builder
 
 	if description != "" {
@@ -69,7 +70,6 @@ func Create(worktreePath, repoFullName, taskID, title, description, why string, 
 
 	if opts != nil && opts.Source != "" {
 		bodyBuilder.WriteString("## Source\n\n")
-		// If it looks like an issue ref (org/repo#N), link to it
 		if strings.Contains(opts.Source, "#") {
 			fmt.Fprintf(&bodyBuilder, "Resolves %s\n\n", opts.Source)
 		} else {
@@ -78,7 +78,7 @@ func Create(worktreePath, repoFullName, taskID, title, description, why string, 
 	}
 
 	bodyBuilder.WriteString("---\n\n")
-	fmt.Fprintf(&bodyBuilder, "Automated PR by [partio-io/minions](https://github.com/partio-io/minions) · Task: `%s`\n\n", taskID)
+	fmt.Fprintf(&bodyBuilder, "Automated PR by [%s](https://github.com/%s) · Task: `%s`\n\n", principalRepo, principalRepo, taskID)
 	bodyBuilder.WriteString("*Created by an unattended coding agent. Please review carefully.*")
 
 	prBody := bodyBuilder.String()

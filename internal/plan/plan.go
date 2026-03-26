@@ -10,6 +10,7 @@ import (
 
 	claudesdk "github.com/partio-io/claude-agent-sdk-go"
 
+	"github.com/partio-io/minions/internal/project"
 	"github.com/partio-io/minions/internal/prompt"
 	"github.com/partio-io/minions/internal/task"
 	"github.com/partio-io/minions/internal/worktree"
@@ -19,9 +20,10 @@ import (
 type Opts struct {
 	Task          *task.Task
 	WorkspaceRoot string
-	MaxTurns      int    // default 15
-	Feedback      string // human feedback from issue comments (for replan)
-	PreviousPlan  string // the prior plan text (for replan)
+	MaxTurns      int              // default 15
+	Feedback      string           // human feedback from issue comments (for replan)
+	PreviousPlan  string           // the prior plan text (for replan)
+	Project       *project.Project // may be nil for backward compat
 }
 
 // Result holds the output of a plan generation.
@@ -42,7 +44,7 @@ func Generate(ctx context.Context, opts Opts) (*Result, error) {
 	t := opts.Task
 
 	// Build plan prompt
-	planPrompt, err := prompt.BuildPlan(t, opts.WorkspaceRoot, opts.Feedback, opts.PreviousPlan)
+	planPrompt, err := prompt.BuildPlan(t, opts.WorkspaceRoot, opts.Feedback, opts.PreviousPlan, opts.Project)
 	if err != nil {
 		return nil, fmt.Errorf("building plan prompt: %w", err)
 	}

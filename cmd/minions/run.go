@@ -15,6 +15,7 @@ import (
 	"github.com/partio-io/minions/internal/agent"
 	appcontext "github.com/partio-io/minions/internal/context"
 	"github.com/partio-io/minions/internal/pipeline"
+	"github.com/partio-io/minions/internal/pr"
 	"github.com/partio-io/minions/internal/prompt"
 	"github.com/partio-io/minions/internal/task"
 )
@@ -26,6 +27,7 @@ func newRunCmd() *cobra.Command {
 	var prRef string
 	var contextJSON string
 	var planFile string
+	var discover bool
 
 	cmd := &cobra.Command{
 		Use:   "run [path]",
@@ -59,11 +61,6 @@ Examples:
 				return runAgent(ctx, agentName, prRef, contextJSON, workspaceRoot, dryRun)
 			}
 
-			// Task mode: path argument required
-			if len(args) == 0 {
-				return fmt.Errorf("either a task path or --agent is required")
-			}
-
 			// Load plan text if provided
 			var planText string
 			if planFile != "" {
@@ -72,6 +69,19 @@ Examples:
 					return fmt.Errorf("reading plan file: %w", err)
 				}
 				planText = string(data)
+			}
+
+			// Discover mode: find tasks from all repos in the project
+			if discover {
+				if proj == nil {
+					return fmt.Errorf("--discover requires a project config (.minions/project.yaml)")
+				}
+				return runDiscoveredTasks(ctx, workspaceRoot, dryRun, parallel, planText)
+			}
+
+			// Task mode: path argument required
+			if len(args) == 0 {
+				return fmt.Errorf("either a task path, --agent, or --discover is required")
 			}
 
 			return runTasks(ctx, args[0], workspaceRoot, dryRun, parallel, planText)
@@ -84,6 +94,7 @@ Examples:
 	cmd.Flags().StringVar(&prRef, "pr", "", "PR reference for PR-triggered agents (e.g., partio-io/cli#42)")
 	cmd.Flags().StringVar(&contextJSON, "context", "", "JSON context for the agent")
 	cmd.Flags().StringVar(&planFile, "plan-file", "", "path to a plan file to include as context")
+	cmd.Flags().BoolVar(&discover, "discover", false, "discover tasks from .minions/tasks/ in all project repos")
 
 	return cmd
 }
@@ -149,7 +160,7 @@ func executeTask(ctx context.Context, t *task.Task, workspaceRoot string, dryRun
 
 	// Build prompt
 	fmt.Println("--- Building prompt ---")
-	taskPrompt, err := prompt.BuildTask(t, workspaceRoot)
+	taskPrompt, err := prompt.BuildTask(t, workspaceRoot, proj)
 	if err != nil {
 		return fmt.Errorf("building prompt: %w", err)
 	}
@@ -160,6 +171,14 @@ func executeTask(ctx context.Context, t *task.Task, workspaceRoot string, dryRun
 		labelsCSV = strings.Join(t.PRLabels, ",")
 	}
 	labels := strings.Split(labelsCSV, ",")
+
+	// Resolve repo names and principal repo from project config
+	var fullNameFn pr.FullNameFunc
+	var principalRepo string
+	if proj != nil {
+		fullNameFn = proj.FullName
+		principalRepo = proj.PrincipalFullName()
+	}
 
 	def := pipeline.Def{
 		Name:            "task-runner",
@@ -180,6 +199,8 @@ func executeTask(ctx context.Context, t *task.Task, workspaceRoot string, dryRun
 		TaskWhy:            t.Why,
 		TaskSource:         t.Source,
 		AcceptanceCriteria: t.AcceptanceCriteria,
+		FullNameFn:         fullNameFn,
+		PrincipalRepo:      principalRepo,
 		DryRun:             dryRun,
 		DebugDir:        debugDirForTask(t.ID),
 	}
@@ -272,16 +293,36 @@ func runAgent(ctx context.Context, agentName, prRef, contextJSON, workspaceRoot 
 	if len(targetRepos) == 1 && prRepo != "" {
 		prRepoFull = prRepo
 		if agentDef.Name == "doc-updater" {
-			prRepoFull = "partio-io/docs"
+			if proj != nil {
+				if dr := proj.DocsRepo(); dr != nil {
+					prRepoFull = dr.FullName
+				}
+			}
+			if prRepoFull == prRepo {
+				prRepoFull = "partio-io/docs" // backward compat fallback
+			}
 		}
 
-		commitMsg = fmt.Sprintf("docs: update for %s#%s\n\nAutomated by partio-io/minions (%s).\nSource PR: %s#%s\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
-			prRepo, prNumber, agentDef.Name, prRepo, prNumber)
+		principalName := "partio-io/minions"
+		if proj != nil {
+			principalName = proj.PrincipalFullName()
+		}
+
+		commitMsg = fmt.Sprintf("docs: update for %s#%s\n\nAutomated by %s (%s).\nSource PR: %s#%s\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+			prRepo, prNumber, principalName, agentDef.Name, prRepo, prNumber)
 
 		prTitle = fmt.Sprintf("[%s] Update for %s#%s: %s", agentDef.Name, prRepo, prNumber, sourcePRTitle)
 
 		prBody = fmt.Sprintf("## Summary\n\nAutomated update for %s#%s.\n\n**Source PR:** https://github.com/%s/pull/%s\n\n---\n\n*This PR was created by the %s. Please review carefully.*",
 			prRepo, prNumber, prRepo, prNumber, agentDef.Name)
+	}
+
+	// Resolve project config for agent pipeline
+	var agentFullNameFn pr.FullNameFunc
+	var agentPrincipalRepo string
+	if proj != nil {
+		agentFullNameFn = proj.FullName
+		agentPrincipalRepo = proj.PrincipalFullName()
 	}
 
 	opts := agent.PipelineOpts{
@@ -294,6 +335,8 @@ func runAgent(ctx context.Context, agentName, prRef, contextJSON, workspaceRoot 
 		PRRepo:         prRepoFull,
 		SourcePRRepo:   prRepo,
 		SourcePRNumber: prNumber,
+		FullNameFn:     agentFullNameFn,
+		PrincipalRepo:  agentPrincipalRepo,
 		DryRun:         dryRun,
 		DebugDir:       debugDirForTask(taskID),
 	}
@@ -316,6 +359,45 @@ func runAgent(ctx context.Context, agentName, prRef, contextJSON, workspaceRoot 
 		fmt.Printf("PR: %s\n", url)
 	}
 	fmt.Printf("\nDONE: %s\n\n", agentDef.Name)
+	return nil
+}
+
+// runDiscoveredTasks discovers tasks from .minions/tasks/ across all project repos and executes them.
+func runDiscoveredTasks(ctx context.Context, workspaceRoot string, dryRun bool, parallel int, planText string) error {
+	tasks, err := task.DiscoverAll(workspaceRoot, proj.RepoNames())
+	if err != nil {
+		return fmt.Errorf("discovering tasks: %w", err)
+	}
+
+	if len(tasks) == 0 {
+		fmt.Println("No tasks discovered from project repos.")
+		return nil
+	}
+
+	fmt.Printf("Discovered %d task(s) from project repos\n", len(tasks))
+	fmt.Printf("Workspace root: %s\n", workspaceRoot)
+	fmt.Printf("Parallel: %d\n", parallel)
+	fmt.Printf("Dry run: %v\n\n", dryRun)
+
+	var failed bool
+	if parallel <= 1 {
+		for _, t := range tasks {
+			if err := executeTask(ctx, t, workspaceRoot, dryRun, planText); err != nil {
+				slog.Error("task failed", "task", t.ID, "error", err)
+				failed = true
+			}
+		}
+	} else {
+		failed = runParallel(ctx, tasks, workspaceRoot, dryRun, parallel, planText)
+	}
+
+	fmt.Println("==========================================")
+	fmt.Println("All discovered tasks complete.")
+	fmt.Println("==========================================")
+
+	if failed {
+		return fmt.Errorf("one or more tasks failed")
+	}
 	return nil
 }
 

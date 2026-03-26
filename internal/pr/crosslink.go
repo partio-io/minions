@@ -17,8 +17,13 @@ func Crosslink(prURL1, prURL2 string) {
 	comment(prURL2, fmt.Sprintf("Related PR: %s", prURL1))
 }
 
+// FullNameFunc resolves a short repo name to its full GitHub name (e.g. "cli" -> "partio-io/cli").
+type FullNameFunc func(short string) string
+
 // CreateAndLinkAll creates PRs in all repos that have changes and cross-links them.
-func CreateAndLinkAll(taskID, title, description, why, workspaceRoot, labelsCSV string, repos []string, opts *CreateOpts) ([]string, error) {
+// fullNameFn resolves short repo names to full GitHub names.
+// principalRepo is the full name of the principal repo (used in commit messages/PR bodies).
+func CreateAndLinkAll(taskID, title, description, why, workspaceRoot, labelsCSV string, repos []string, fullNameFn FullNameFunc, principalRepo string, opts *CreateOpts) ([]string, error) {
 	var labels []string
 	if labelsCSV != "" {
 		labels = strings.Split(labelsCSV, ",")
@@ -28,9 +33,9 @@ func CreateAndLinkAll(taskID, title, description, why, workspaceRoot, labelsCSV 
 
 	for _, repo := range repos {
 		wtPath := filepath.Join(workspaceRoot, repo, ".minion-worktrees", taskID)
-		repoFullName := "partio-io/" + repo
+		repoFullName := fullNameFn(repo)
 
-		prURL, err := Create(wtPath, repoFullName, taskID, title, description, why, labels, opts)
+		prURL, err := Create(wtPath, repoFullName, taskID, title, description, why, labels, principalRepo, opts)
 		if err != nil {
 			slog.Error("failed to create PR", "repo", repo, "error", err)
 			continue
@@ -56,7 +61,8 @@ func CreateAndLinkAll(taskID, title, description, why, workspaceRoot, labelsCSV 
 }
 
 // CreateDocsPR creates a PR in the docs repo for a documentation update.
-func CreateDocsPR(prRepo, prNumber, branchName, sourcePRTitle string) (string, error) {
+// docsRepoFullName is the full GitHub name of the docs repo (e.g. "partio-io/docs").
+func CreateDocsPR(docsRepoFullName, prRepo, prNumber, branchName, sourcePRTitle string) (string, error) {
 	title := fmt.Sprintf("[docs] Update for %s#%s: %s", prRepo, prNumber, sourcePRTitle)
 	body := fmt.Sprintf(`## Summary
 
@@ -70,13 +76,13 @@ Automated documentation update for %s#%s.
 
 	// Ensure labels exist in target repo (ignore errors for already-existing labels)
 	for _, l := range []string{"minion", "documentation"} {
-		create := exec.Command("gh", "label", "create", l, "--repo", "partio-io/docs")
+		create := exec.Command("gh", "label", "create", l, "--repo", docsRepoFullName)
 		_ = create.Run()
 	}
 
 	args := []string{
 		"pr", "create",
-		"--repo", "partio-io/docs",
+		"--repo", docsRepoFullName,
 		"--head", branchName,
 		"--title", title,
 		"--body", body,

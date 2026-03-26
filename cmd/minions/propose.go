@@ -36,7 +36,10 @@ func newProposeCmd() *cobra.Command {
 			}
 
 			// The repo where proposal issues are created
-			const issueRepo = "partio-io/minions"
+			issueRepo := "partio-io/minions"
+			if proj != nil {
+				issueRepo = proj.PrincipalFullName()
+			}
 
 			for i, src := range sources.Sources {
 				if sourceName != "" && src.Name != sourceName {
