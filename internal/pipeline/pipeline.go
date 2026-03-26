@@ -48,9 +48,11 @@ type Def struct {
 	StageFiles []string // for single-repo: specific files to stage; empty = git add -A
 
 	// Multi-repo task fields (used by pr.CreateAndLinkAll)
-	TaskTitle       string
-	TaskDescription string
-	TaskWhy         string
+	TaskTitle          string
+	TaskDescription    string
+	TaskWhy            string
+	TaskSource         string   // e.g., "partio-io/minions#3"
+	AcceptanceCriteria []string // included in PR body
 
 	// Cross-linking
 	SourcePRRepo   string
@@ -257,7 +259,11 @@ func Execute(ctx context.Context, def Def) (*Result, error) {
 			if labelsCSV == "" {
 				labelsCSV = "minion"
 			}
-			urls, err := pr.CreateAndLinkAll(def.TaskID, def.TaskTitle, def.TaskDescription, def.TaskWhy, def.WorkspaceRoot, labelsCSV, worktreeRepos)
+			prOpts := &pr.CreateOpts{
+				Source:             def.TaskSource,
+				AcceptanceCriteria: def.AcceptanceCriteria,
+			}
+			urls, err := pr.CreateAndLinkAll(def.TaskID, def.TaskTitle, def.TaskDescription, def.TaskWhy, def.WorkspaceRoot, labelsCSV, worktreeRepos, prOpts)
 			if err != nil {
 				cleanup()
 				return nil, fmt.Errorf("PR creation failed: %w", err)
