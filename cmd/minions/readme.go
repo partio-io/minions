@@ -89,7 +89,7 @@ func newReadmeCmd() *cobra.Command {
 				PRLabels:       []string{"minion"},
 				PRRepo:         prRepo,
 				StageFiles:     []string{"README.md"},
-				CommitMsg:      fmt.Sprintf("docs: update README for %s#%s\n\nAutomated README update by partio-io/minions readme-minion.\nSource PR: %s#%s — %s\n\nCo-Authored-By: Claude <noreply@anthropic.com>", prRepo, prNumber, prRepo, prNumber, sourcePRTitle),
+				CommitMsg:      fmt.Sprintf("docs: update README for %s#%s\n\nAutomated README update by minions readme-minion.\nSource PR: %s#%s — %s\n\nCo-Authored-By: Claude <noreply@anthropic.com>", prRepo, prNumber, prRepo, prNumber, sourcePRTitle),
 				PRTitle:        fmt.Sprintf("[readme] Update for %s#%s: %s", prRepo, prNumber, sourcePRTitle),
 				PRBody:         fmt.Sprintf("## Summary\n\nAutomated README update for %s#%s.\n\n**Source PR:** https://github.com/%s/pull/%s\n\n---\n\n*This PR was created by the readme-minion. Please review carefully.*", prRepo, prNumber, prRepo, prNumber),
 				SourcePRRepo:   prRepo,

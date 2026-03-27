@@ -36,10 +36,10 @@ func newProposeCmd() *cobra.Command {
 			}
 
 			// The repo where proposal issues are created
-			issueRepo := "partio-io/minions"
-			if proj != nil {
-				issueRepo = proj.PrincipalFullName()
+			if proj == nil {
+				return fmt.Errorf("project config required: ensure .minions/project.yaml exists in the workspace")
 			}
+			issueRepo := proj.PrincipalFullName()
 
 			for i, src := range sources.Sources {
 				if sourceName != "" && src.Name != sourceName {

@@ -5,8 +5,8 @@ org: partio-io
 
 # Principal repository — where proposals, approvals, and status tracking happen
 principal:
-  name: minions
-  full_name: partio-io/minions
+  name: cli
+  full_name: partio-io/cli
 
 # Target repositories that minions can work on
 repos:

@@ -68,11 +68,26 @@ func newDocCmd() *cobra.Command {
 
 			sourcePRTitle := prompt.GHPRField(prRepo, prNumber, "title")
 
+			// Resolve docs repo from project config
+			docsRepoName := "docs"
+			docsRepoFull := ""
+			principalName := ""
+			if proj != nil {
+				if dr := proj.DocsRepo(); dr != nil {
+					docsRepoName = dr.Name
+					docsRepoFull = dr.FullName
+				}
+				principalName = proj.PrincipalFullName()
+			}
+			if docsRepoFull == "" {
+				return fmt.Errorf("project config required: no docs repo configured in .minions/project.yaml")
+			}
+
 			def := pipeline.Def{
 				Name:           "doc-updater",
 				TaskID:         taskID,
 				WorkspaceRoot:  workspaceRoot,
-				TargetRepos:    []string{"docs"},
+				TargetRepos:    []string{docsRepoName},
 				PromptText:     docPrompt,
 				MaxTurns:       maxTurns,
 				AllowedTools:   "Edit,Write,Read,Glob,Grep,Bash",
@@ -82,8 +97,8 @@ func newDocCmd() *cobra.Command {
 				RetryMaxTurns:  10,
 				CreatePR:       true,
 				PRLabels:       []string{"minion", "documentation"},
-				PRRepo:         "partio-io/docs",
-				CommitMsg:      fmt.Sprintf("docs: update for %s#%s\n\nAutomated documentation update by partio-io/minions doc-minion.\nSource PR: %s#%s\n\nCo-Authored-By: Claude <noreply@anthropic.com>", prRepo, prNumber, prRepo, prNumber),
+				PRRepo:         docsRepoFull,
+				CommitMsg:      fmt.Sprintf("docs: update for %s#%s\n\nAutomated documentation update by %s doc-minion.\nSource PR: %s#%s\n\nCo-Authored-By: Claude <noreply@anthropic.com>", prRepo, prNumber, principalName, prRepo, prNumber),
 				PRTitle:        fmt.Sprintf("[docs] Update for %s#%s: %s", prRepo, prNumber, sourcePRTitle),
 				PRBody:         fmt.Sprintf("## Summary\n\nAutomated documentation update for %s#%s.\n\n**Source PR:** https://github.com/%s/pull/%s\n\n---\n\n*This PR was created by the doc-minion. Please review carefully.*", prRepo, prNumber, prRepo, prNumber),
 				SourcePRRepo:   prRepo,
