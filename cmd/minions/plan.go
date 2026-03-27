@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/partio-io/minions/internal/plan"
+	"github.com/partio-io/minions/internal/program"
 	"github.com/partio-io/minions/internal/prompt"
 	"github.com/partio-io/minions/internal/propose"
 	"github.com/partio-io/minions/internal/task"
@@ -33,7 +34,7 @@ The plan is posted as a comment on the corresponding GitHub issue.
 
 Examples:
   minions plan tasks/my-task.yaml --dry-run
-  minions plan --issue 42 --repo partio-io/minions`,
+  minions plan --issue 42 --repo my-org/my-repo`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -51,25 +52,28 @@ Examples:
 				workspaceRoot = filepath.Dir(wd)
 			}
 
-			// Load task from file or issue
+			// Load program from file or issue, convert to task for planning
 			var t *task.Task
 			if issueNum > 0 {
 				if repo == "" {
-					repo = "partio-io/minions"
+					if proj == nil {
+						return fmt.Errorf("project config required: ensure .minions/project.yaml exists or pass --repo")
+					}
+					repo = proj.PrincipalFullName()
 				}
-				var err error
-				t, err = loadTaskFromIssue(repo, issueNum)
+				prog, err := loadProgramFromIssue(repo, issueNum)
 				if err != nil {
-					return fmt.Errorf("loading task from issue #%d: %w", issueNum, err)
+					return fmt.Errorf("loading program from issue #%d: %w", issueNum, err)
 				}
+				t = programToTask(prog)
 			} else if len(args) > 0 {
-				var err error
-				t, err = task.LoadFile(args[0])
+				prog, err := program.LoadFile(args[0])
 				if err != nil {
-					return err
+					return fmt.Errorf("loading program: %w", err)
 				}
+				t = programToTask(prog)
 			} else {
-				return fmt.Errorf("either a task file or --issue is required")
+				return fmt.Errorf("either a program file or --issue is required")
 			}
 
 			fmt.Println("==========================================")
@@ -132,14 +136,14 @@ Examples:
 	}
 
 	cmd.Flags().IntVar(&issueNum, "issue", 0, "GitHub issue number to plan for")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repo (default: partio-io/minions)")
+	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repo (default: from project config)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview generated prompt without executing")
 
 	return cmd
 }
 
 // loadTaskFromIssue extracts the embedded task YAML from a GitHub issue.
-func loadTaskFromIssue(repo string, issueNum int) (*task.Task, error) {
+func loadProgramFromIssue(repo string, issueNum int) (*program.Program, error) {
 	cmd := exec.Command("gh", "issue", "view",
 		fmt.Sprintf("%d", issueNum),
 		"--repo", repo,
@@ -151,25 +155,12 @@ func loadTaskFromIssue(repo string, issueNum int) (*task.Task, error) {
 		return nil, fmt.Errorf("fetching issue: %w", err)
 	}
 
-	yamlStr := propose.ExtractTaskYAMLFromIssue(string(out))
-	if yamlStr == "" {
-		return nil, fmt.Errorf("no embedded minion-task YAML found in issue #%d", issueNum)
+	programMD := propose.ExtractProgramFromIssue(string(out))
+	if programMD == "" {
+		return nil, fmt.Errorf("no embedded program found in issue #%d", issueNum)
 	}
 
-	// Write to temp file and load
-	tmpFile, err := os.CreateTemp("", "minion-plan-*.yaml")
-	if err != nil {
-		return nil, err
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.WriteString(yamlStr); err != nil {
-		tmpFile.Close()
-		return nil, err
-	}
-	tmpFile.Close()
-
-	return task.LoadFile(tmpFile.Name())
+	return program.Parse(programMD)
 }
 
 // gatherReplanContext fetches human comments and the previous plan from an issue.
@@ -281,4 +272,18 @@ func updatePlanLabels(repo string, issueNum int) error {
 // buildPlanPromptForDryRun generates the plan prompt for --dry-run output.
 func buildPlanPromptForDryRun(t *task.Task, workspaceRoot, feedback, previousPlan string) (string, error) {
 	return prompt.BuildPlan(t, workspaceRoot, feedback, previousPlan, proj)
+}
+
+// programToTask converts a Program to a Task for use with the planning system.
+func programToTask(prog *program.Program) *task.Task {
+	return &task.Task{
+		ID:                 prog.ID,
+		Title:              prog.Title,
+		Source:             prog.Source,
+		Description:        prog.Description,
+		TargetRepos:        prog.TargetRepos,
+		ContextHints:       prog.ContextHints,
+		AcceptanceCriteria: prog.AcceptanceCriteria,
+		PRLabels:           prog.PRLabels,
+	}
 }

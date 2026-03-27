@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	"github.com/partio-io/minions/internal/ingest"
-
-	"gopkg.in/yaml.v3"
 )
 
 // crossRepoRefRe matches shorthand cross-repo references like "org/repo#123".
@@ -135,68 +133,207 @@ func FormatIssueBody(f ingest.Feature, sourceName, sourceType, sourceRepo string
 		b.WriteString("\n")
 	}
 
-	// Embedded task YAML for machine parsing
+	// Embedded program for machine parsing
 	b.WriteString("---\n\n")
 	b.WriteString("Comment `/minion build` or add the `minion-approved` label to begin implementation.\n\n")
-	b.WriteString(embedTaskYAML(f, sourceType))
+	b.WriteString(embedProgram(f))
 
 	return b.String()
 }
 
-// embedTaskYAML generates a hidden HTML comment containing the task spec as YAML.
-func embedTaskYAML(f ingest.Feature, sourceType string) string {
-	task := struct {
-		ID                 string   `yaml:"id"`
-		Title              string   `yaml:"title"`
-		Source             string   `yaml:"source"`
-		SourceType         string   `yaml:"source_type"`
-		Description        string   `yaml:"description"`
-		Why                string   `yaml:"why,omitempty"`
-		UserRelevance      string   `yaml:"user_relevance,omitempty"`
-		TargetRepos        []string `yaml:"target_repos"`
-		ContextHints       []string `yaml:"context_hints"`
-		AcceptanceCriteria []string `yaml:"acceptance_criteria"`
-		PRLabels           []string `yaml:"pr_labels"`
-		Plan               bool     `yaml:"plan,omitempty"`
-	}{
-		ID:                 f.ID,
-		Title:              f.Title,
-		Source:             f.Source,
-		SourceType:         sourceType,
-		Description:        f.Description,
-		Why:                f.Why,
-		UserRelevance:      f.UserRelevance,
-		TargetRepos:        f.TargetRepos,
-		ContextHints:       f.ContextHints,
-		AcceptanceCriteria: f.AcceptanceCriteria,
-		PRLabels:           []string{"minion", "feature"},
-		Plan:               f.Plan,
+// embedProgram generates a hidden HTML comment containing the program as .md format.
+func embedProgram(f ingest.Feature) string {
+	var p strings.Builder
+
+	// Frontmatter
+	p.WriteString("---\n")
+	fmt.Fprintf(&p, "id: %s\n", f.ID)
+	if f.Source != "" {
+		fmt.Fprintf(&p, "source: %s\n", f.Source)
+	}
+	if len(f.TargetRepos) > 0 {
+		p.WriteString("target_repos:\n")
+		for _, r := range f.TargetRepos {
+			fmt.Fprintf(&p, "  - %s\n", r)
+		}
+	}
+	if len(f.AcceptanceCriteria) > 0 {
+		p.WriteString("acceptance_criteria:\n")
+		for _, c := range f.AcceptanceCriteria {
+			fmt.Fprintf(&p, "  - %s\n", c)
+		}
+	}
+	p.WriteString("pr_labels:\n  - minion\n  - feature\n")
+	p.WriteString("---\n\n")
+
+	// Title
+	fmt.Fprintf(&p, "# %s\n\n", f.Title)
+
+	// Description
+	p.WriteString(f.Description)
+	p.WriteString("\n")
+
+	// Context hints as ## Context section
+	if len(f.ContextHints) > 0 {
+		p.WriteString("\n## Context\n\n")
+		for _, ch := range f.ContextHints {
+			fmt.Fprintf(&p, "- `%s`\n", ch)
+		}
 	}
 
-	data, err := yaml.Marshal(&task)
-	if err != nil {
-		return ""
-	}
-
-	return fmt.Sprintf("<!-- minion-task\n%s minion-task -->", string(data))
+	return fmt.Sprintf("<!-- minion-program\n%s\nminion-program -->", p.String())
 }
 
-// ExtractTaskYAMLFromIssue extracts the embedded task YAML from an issue body.
-// Returns the YAML string between <!-- minion-task and minion-task --> markers.
-func ExtractTaskYAMLFromIssue(body string) string {
-	const startMarker = "<!-- minion-task\n"
-	const endMarker = "minion-task -->"
+// ExtractProgramFromIssue extracts the embedded program from an issue body.
+// Checks for <!-- minion-program --> first, falls back to <!-- minion-task --> (legacy).
+func ExtractProgramFromIssue(body string) string {
+	// Try new program format first
+	if prog := extractBetweenMarkers(body, "<!-- minion-program\n", "minion-program -->"); prog != "" {
+		return prog
+	}
 
+	// Fall back to legacy YAML task format — convert to program
+	yaml := extractBetweenMarkers(body, "<!-- minion-task\n", "minion-task -->")
+	if yaml == "" {
+		return ""
+	}
+	return convertYAMLToProgram(yaml)
+}
+
+// extractBetweenMarkers extracts text between start and end markers.
+func extractBetweenMarkers(body, startMarker, endMarker string) string {
 	startIdx := strings.Index(body, startMarker)
 	if startIdx == -1 {
 		return ""
 	}
-
 	startIdx += len(startMarker)
 	endIdx := strings.Index(body[startIdx:], endMarker)
 	if endIdx == -1 {
 		return ""
 	}
-
 	return strings.TrimSpace(body[startIdx : startIdx+endIdx])
+}
+
+// convertYAMLToProgram converts legacy embedded YAML task to program .md format.
+// This handles the 92 existing issues that have <!-- minion-task --> format.
+func convertYAMLToProgram(yamlContent string) string {
+	// Parse key fields from YAML using simple line-by-line extraction
+	// (avoids importing yaml just for this conversion)
+	var id, title, source, description string
+	var targetRepos, criteria, contextHints []string
+	var inDesc, inTargetRepos, inCriteria, inContextHints bool
+
+	for _, line := range strings.Split(yamlContent, "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		// Detect section starts
+		if strings.HasPrefix(line, "id:") {
+			id = strings.TrimSpace(strings.TrimPrefix(line, "id:"))
+			continue
+		}
+		if strings.HasPrefix(line, "title:") {
+			title = strings.TrimSpace(strings.TrimPrefix(line, "title:"))
+			title = strings.Trim(title, "'\"")
+			continue
+		}
+		if strings.HasPrefix(line, "source:") {
+			source = strings.TrimSpace(strings.TrimPrefix(line, "source:"))
+			continue
+		}
+		if strings.HasPrefix(line, "description:") {
+			inDesc = true
+			inTargetRepos = false
+			inCriteria = false
+			inContextHints = false
+			// Inline value
+			val := strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+			if val != "" && val != "|" {
+				description = strings.Trim(val, "'\"")
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "target_repos:") {
+			inDesc = false
+			inTargetRepos = true
+			inCriteria = false
+			inContextHints = false
+			continue
+		}
+		if strings.HasPrefix(line, "acceptance_criteria:") {
+			inDesc = false
+			inTargetRepos = false
+			inCriteria = true
+			inContextHints = false
+			continue
+		}
+		if strings.HasPrefix(line, "context_hints:") {
+			inDesc = false
+			inTargetRepos = false
+			inCriteria = false
+			inContextHints = true
+			continue
+		}
+		// Other top-level keys end current section
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && strings.Contains(line, ":") && trimmed != "" {
+			inDesc = false
+			inTargetRepos = false
+			inCriteria = false
+			inContextHints = false
+			continue
+		}
+
+		// Collect values
+		if inDesc && (strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "\t")) {
+			description += strings.TrimPrefix(strings.TrimPrefix(line, "    "), "  ") + "\n"
+		}
+		if inTargetRepos && strings.HasPrefix(trimmed, "- ") {
+			targetRepos = append(targetRepos, strings.TrimSpace(trimmed[2:]))
+		}
+		if inCriteria && strings.HasPrefix(trimmed, "- ") {
+			criteria = append(criteria, strings.TrimSpace(trimmed[2:]))
+		}
+		if inContextHints && strings.HasPrefix(trimmed, "- ") {
+			contextHints = append(contextHints, strings.TrimSpace(trimmed[2:]))
+		}
+	}
+
+	// Build program .md
+	var p strings.Builder
+	p.WriteString("---\n")
+	if id != "" {
+		fmt.Fprintf(&p, "id: %s\n", id)
+	}
+	if source != "" {
+		fmt.Fprintf(&p, "source: %s\n", source)
+	}
+	if len(targetRepos) > 0 {
+		p.WriteString("target_repos:\n")
+		for _, r := range targetRepos {
+			fmt.Fprintf(&p, "  - %s\n", r)
+		}
+	}
+	if len(criteria) > 0 {
+		p.WriteString("acceptance_criteria:\n")
+		for _, c := range criteria {
+			fmt.Fprintf(&p, "  - %s\n", c)
+		}
+	}
+	p.WriteString("pr_labels:\n  - minion\n  - feature\n")
+	p.WriteString("---\n\n")
+
+	if title != "" {
+		fmt.Fprintf(&p, "# %s\n\n", title)
+	}
+	if description != "" {
+		p.WriteString(strings.TrimSpace(description))
+		p.WriteString("\n")
+	}
+	if len(contextHints) > 0 {
+		p.WriteString("\n## Context\n\n")
+		for _, ch := range contextHints {
+			fmt.Fprintf(&p, "- `%s`\n", ch)
+		}
+	}
+
+	return p.String()
 }

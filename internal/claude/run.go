@@ -13,11 +13,14 @@ import (
 
 // Opts configures a headless Claude Code invocation.
 type Opts struct {
-	Prompt       string
-	CWD          string
-	MaxTurns     int
-	AllowedTools string // Comma-separated tool list. Defaults to "Edit,Write,Read,Glob,Grep,Bash".
-	LogFile      string // If set, write result JSON to this file for debug observability
+	Prompt         string
+	CWD            string
+	MaxTurns       int
+	AllowedTools   string // Comma-separated tool list. Defaults to "Edit,Write,Read,Glob,Grep,Bash".
+	LogFile        string // If set, write result JSON to this file for debug observability
+	PermissionMode string // "default", "plan", "bypassPermissions", etc.
+	MaxBudgetUSD   float64
+	MCPServers     map[string]claudesdk.MCPServerConfig // MCP servers to register
 }
 
 // Result holds structured output from a Claude invocation.
@@ -26,8 +29,15 @@ type Result struct {
 	ResultText   string
 	NumTurns     int
 	DurationMs   int
+	DurationAPIMs int
 	TotalCostUSD float64
 	IsError      bool
+
+	// Token usage from SDK ResultMessage.Usage
+	InputTokens              int
+	OutputTokens             int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
 }
 
 // Run executes a one-shot Claude prompt via the Agent SDK.
@@ -50,6 +60,16 @@ func Run(ctx context.Context, opts Opts) (*Result, error) {
 		claudesdk.WithVerbose(true),
 	}
 
+	if opts.PermissionMode != "" {
+		sdkOpts = append(sdkOpts, claudesdk.WithPermissionMode(opts.PermissionMode))
+	}
+	if opts.MaxBudgetUSD > 0 {
+		sdkOpts = append(sdkOpts, claudesdk.WithMaxBudgetUSD(opts.MaxBudgetUSD))
+	}
+	for name, srv := range opts.MCPServers {
+		sdkOpts = append(sdkOpts, claudesdk.WithMCPServer(name, srv))
+	}
+
 	slog.Info("running claude", "cwd", opts.CWD, "max_turns", opts.MaxTurns)
 
 	resultMsg, err := claudesdk.Prompt(ctx, opts.Prompt, sdkOpts...)
@@ -58,16 +78,23 @@ func Run(ctx context.Context, opts Opts) (*Result, error) {
 	}
 
 	result := &Result{
-		Subtype:    string(resultMsg.Subtype),
-		NumTurns:   resultMsg.NumTurns,
-		DurationMs: resultMsg.DurationMs,
-		IsError:    resultMsg.IsError,
+		Subtype:       string(resultMsg.Subtype),
+		NumTurns:      resultMsg.NumTurns,
+		DurationMs:    resultMsg.DurationMs,
+		DurationAPIMs: resultMsg.DurationAPIMs,
+		IsError:       resultMsg.IsError,
 	}
 	if resultMsg.Result != nil {
 		result.ResultText = *resultMsg.Result
 	}
 	if resultMsg.TotalCostUSD != nil {
 		result.TotalCostUSD = *resultMsg.TotalCostUSD
+	}
+	if resultMsg.Usage != nil {
+		result.InputTokens = resultMsg.Usage.InputTokens
+		result.OutputTokens = resultMsg.Usage.OutputTokens
+		result.CacheCreationInputTokens = resultMsg.Usage.CacheCreationInputTokens
+		result.CacheReadInputTokens = resultMsg.Usage.CacheReadInputTokens
 	}
 
 	slog.Info("claude completed",
