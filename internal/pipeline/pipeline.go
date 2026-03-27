@@ -51,7 +51,7 @@ type Def struct {
 	TaskTitle          string
 	TaskDescription    string
 	TaskWhy            string
-	TaskSource         string   // e.g., "partio-io/minions#3"
+	TaskSource         string   // e.g., "partio-io/cli#3"
 	AcceptanceCriteria []string // included in PR body
 
 	// Cross-linking
@@ -60,7 +60,7 @@ type Def struct {
 
 	// Multi-repo resolution
 	FullNameFn    pr.FullNameFunc // resolves short repo name to full GitHub name
-	PrincipalRepo string         // full name of the principal repo (e.g. "partio-io/minions")
+	PrincipalRepo string         // full name of the principal repo (e.g. "partio-io/cli")
 
 	// Control
 	DryRun   bool
@@ -263,19 +263,15 @@ func Execute(ctx context.Context, def Def) (*Result, error) {
 			if labelsCSV == "" {
 				labelsCSV = "minion"
 			}
-			fullNameFn := def.FullNameFn
-			if fullNameFn == nil {
-				fullNameFn = func(s string) string { return "partio-io/" + s }
-			}
-			principalRepo := def.PrincipalRepo
-			if principalRepo == "" {
-				principalRepo = "partio-io/minions"
+			if def.FullNameFn == nil || def.PrincipalRepo == "" {
+				cleanup()
+				return nil, fmt.Errorf("project config required: FullNameFn and PrincipalRepo must be set (ensure .minions/project.yaml exists)")
 			}
 			prOpts := &pr.CreateOpts{
 				Source:             def.TaskSource,
 				AcceptanceCriteria: def.AcceptanceCriteria,
 			}
-			urls, err := pr.CreateAndLinkAll(def.TaskID, def.TaskTitle, def.TaskDescription, def.TaskWhy, def.WorkspaceRoot, labelsCSV, worktreeRepos, fullNameFn, principalRepo, prOpts)
+			urls, err := pr.CreateAndLinkAll(def.TaskID, def.TaskTitle, def.TaskDescription, def.TaskWhy, def.WorkspaceRoot, labelsCSV, worktreeRepos, def.FullNameFn, def.PrincipalRepo, prOpts)
 			if err != nil {
 				cleanup()
 				return nil, fmt.Errorf("PR creation failed: %w", err)

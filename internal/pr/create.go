@@ -12,7 +12,7 @@ import (
 
 // CreateOpts holds optional fields for PR creation.
 type CreateOpts struct {
-	Source             string   // e.g., "partio-io/minions#3" — referenced in PR body
+	Source             string   // e.g., "partio-io/cli#3" — referenced in PR body
 	AcceptanceCriteria []string // listed in PR body
 }
 

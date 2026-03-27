@@ -37,8 +37,8 @@ func newRunCmd() *cobra.Command {
 Examples:
   minions run tasks/my-task.yaml
   minions run tasks/ --parallel 3
-  minions run --agent doc-updater --pr partio-io/cli#42
-  minions run --agent readme-updater --pr partio-io/app#42`,
+  minions run --agent doc-updater --pr my-org/my-repo#42
+  minions run --agent readme-updater --pr my-org/my-repo#42`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -173,12 +173,11 @@ func executeTask(ctx context.Context, t *task.Task, workspaceRoot string, dryRun
 	labels := strings.Split(labelsCSV, ",")
 
 	// Resolve repo names and principal repo from project config
-	var fullNameFn pr.FullNameFunc
-	var principalRepo string
-	if proj != nil {
-		fullNameFn = proj.FullName
-		principalRepo = proj.PrincipalFullName()
+	if proj == nil {
+		return fmt.Errorf("project config required: ensure .minions/project.yaml exists in the workspace")
 	}
+	fullNameFn := pr.FullNameFunc(proj.FullName)
+	principalRepo := proj.PrincipalFullName()
 
 	def := pipeline.Def{
 		Name:            "task-runner",
@@ -292,18 +291,13 @@ func runAgent(ctx context.Context, agentName, prRef, contextJSON, workspaceRoot 
 
 	if len(targetRepos) == 1 && prRepo != "" {
 		prRepoFull = prRepo
-		if agentDef.Name == "doc-updater" {
-			if proj != nil {
-				if dr := proj.DocsRepo(); dr != nil {
-					prRepoFull = dr.FullName
-				}
-			}
-			if prRepoFull == prRepo {
-				prRepoFull = "partio-io/docs" // backward compat fallback
+		if agentDef.Name == "doc-updater" && proj != nil {
+			if dr := proj.DocsRepo(); dr != nil {
+				prRepoFull = dr.FullName
 			}
 		}
 
-		principalName := "partio-io/minions"
+		principalName := ""
 		if proj != nil {
 			principalName = proj.PrincipalFullName()
 		}
@@ -321,7 +315,7 @@ func runAgent(ctx context.Context, agentName, prRef, contextJSON, workspaceRoot 
 	var agentFullNameFn pr.FullNameFunc
 	var agentPrincipalRepo string
 	if proj != nil {
-		agentFullNameFn = proj.FullName
+		agentFullNameFn = pr.FullNameFunc(proj.FullName)
 		agentPrincipalRepo = proj.PrincipalFullName()
 	}
 

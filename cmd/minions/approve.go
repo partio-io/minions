@@ -23,10 +23,10 @@ func newApproveCmd() *cobra.Command {
 		Long:  `Scans open minion-proposal issues and adds the minion-approved label to those that have passed the review window without objection.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if repo == "" {
-				repo = "partio-io/minions"
-				if proj != nil {
-					repo = proj.PrincipalFullName()
+				if proj == nil {
+					return fmt.Errorf("project config required: ensure .minions/project.yaml exists or pass --repo")
 				}
+				repo = proj.PrincipalFullName()
 			}
 
 			delayDur, err := time.ParseDuration(delay)
@@ -82,7 +82,7 @@ func newApproveCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be approved without making changes")
 	cmd.Flags().StringVar(&delay, "delay", "24h", "minimum age before auto-approval (e.g., 24h, 0h)")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository for proposal issues (default: from project config or partio-io/minions)")
+	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository for proposal issues (default: from project config)")
 
 	return cmd
 }

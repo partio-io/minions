@@ -33,7 +33,7 @@ The plan is posted as a comment on the corresponding GitHub issue.
 
 Examples:
   minions plan tasks/my-task.yaml --dry-run
-  minions plan --issue 42 --repo partio-io/minions`,
+  minions plan --issue 42 --repo my-org/my-repo`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -55,7 +55,10 @@ Examples:
 			var t *task.Task
 			if issueNum > 0 {
 				if repo == "" {
-					repo = "partio-io/minions"
+					if proj == nil {
+						return fmt.Errorf("project config required: ensure .minions/project.yaml exists or pass --repo")
+					}
+					repo = proj.PrincipalFullName()
 				}
 				var err error
 				t, err = loadTaskFromIssue(repo, issueNum)
@@ -132,7 +135,7 @@ Examples:
 	}
 
 	cmd.Flags().IntVar(&issueNum, "issue", 0, "GitHub issue number to plan for")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repo (default: partio-io/minions)")
+	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repo (default: from project config)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview generated prompt without executing")
 
 	return cmd
