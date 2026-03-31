@@ -24,6 +24,7 @@ import (
 type Opts struct {
 	Program       *program.Program
 	PlanText      string
+	IssueContext  string // fetched issue body, injected into prompt
 	WorkspaceRoot string
 	Project       *project.Project
 	Tracker       *pcontext.Tracker
@@ -96,7 +97,7 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 	pt := opts.Tracker.StartPhase("agent:" + agent.Name)
 
 	// Build prompt
-	promptText := buildAgentPrompt(prog, agent, opts.PlanText, opts.WorkspaceRoot, opts.Project, pt)
+	promptText := buildAgentPrompt(prog, agent, opts.PlanText, opts.IssueContext, opts.WorkspaceRoot, opts.Project, pt)
 
 	if opts.DryRun {
 		fmt.Printf("\n=== DRY RUN: Agent %s Prompt ===\n", agent.Name)
