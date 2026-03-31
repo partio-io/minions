@@ -77,12 +77,6 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newVersionCmd(),
 		newRunCmd(),
-		newPlanCmd(),
-		newIngestCmd(),
-		newDocCmd(),
-		newReadmeCmd(),
-		newProposeCmd(),
-		newApproveCmd(),
 		newInitCmd(),
 	)
 
