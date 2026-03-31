@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -25,8 +26,11 @@ func newProposeCmd() *cobra.Command {
 			ctx := cmd.Context()
 
 			if sourcesFile == "" {
-				// Default: sources.yaml in the minions repo root
-				sourcesFile = filepath.Join(cfg.WorkspaceRoot, "minions", "sources.yaml")
+				if proj == nil {
+					return fmt.Errorf("project config required: ensure .minions/project.yaml exists in the workspace")
+				}
+				// Look for sources.yaml in the principal repo's .minions/ directory
+				sourcesFile = filepath.Join(cfg.WorkspaceRoot, proj.Principal.Name, ".minions", "sources.yaml")
 			}
 
 			slog.Info("loading sources", "file", sourcesFile)
@@ -41,12 +45,20 @@ func newProposeCmd() *cobra.Command {
 			}
 			issueRepo := proj.PrincipalFullName()
 
+			// Look for custom ingest prompt in the principal repo
+			ingestPromptPath := filepath.Join(cfg.WorkspaceRoot, proj.Principal.Name, ".minions", "ingest-prompt.md")
+			if _, err := os.Stat(ingestPromptPath); os.IsNotExist(err) {
+				ingestPromptPath = "" // fall back to embedded default
+			}
+
+			principalRepoPath := filepath.Join(cfg.WorkspaceRoot, proj.Principal.Name)
+
 			for i, src := range sources.Sources {
 				if sourceName != "" && src.Name != sourceName {
 					continue
 				}
 
-				latestVersion, err := propose.ProcessSource(ctx, src, issueRepo, dryRun)
+				latestVersion, err := propose.ProcessSource(ctx, src, issueRepo, principalRepoPath, ingestPromptPath, dryRun)
 				if err != nil {
 					slog.Error("processing source failed", "source", src.Name, "error", err)
 					continue

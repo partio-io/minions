@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -42,12 +44,23 @@ func DetectNewVersions(content, lastVersion string) []string {
 	return versions
 }
 
-// ExtractFeatures sends changelog content to Claude and returns extracted features.
-// This duplicates the Claude-calling portion of ingest.GenerateTasks but skips file writing.
-func ExtractFeatures(ctx context.Context, sourceType, sourceURL, content string) ([]ingest.Feature, error) {
-	tmpl, err := prompt.Template("ingest-prompt.md")
-	if err != nil {
-		return nil, fmt.Errorf("loading ingest template: %w", err)
+// ExtractFeatures sends content to Claude and returns extracted features.
+// If ingestPromptPath is non-empty, it is used instead of the embedded ingest-prompt.md.
+func ExtractFeatures(ctx context.Context, sourceType, sourceURL, content, ingestPromptPath string) ([]ingest.Feature, error) {
+	var tmpl string
+	var err error
+
+	if ingestPromptPath != "" {
+		data, readErr := os.ReadFile(ingestPromptPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("loading custom ingest prompt %s: %w", ingestPromptPath, readErr)
+		}
+		tmpl = string(data)
+	} else {
+		tmpl, err = prompt.Template("ingest-prompt.md")
+		if err != nil {
+			return nil, fmt.Errorf("loading ingest template: %w", err)
+		}
 	}
 
 	fullPrompt := tmpl
@@ -76,20 +89,21 @@ func ExtractFeatures(ctx context.Context, sourceType, sourceURL, content string)
 }
 
 // ProcessSource dispatches to the appropriate handler based on source type.
+// ingestPromptPath is the path to a custom ingest prompt (empty = use embedded default).
 // Returns the latest version/cursor string processed (for updating sources.yaml).
-func ProcessSource(ctx context.Context, src Source, repo string, dryRun bool) (string, error) {
+func ProcessSource(ctx context.Context, src Source, repo, principalRepoPath, ingestPromptPath string, dryRun bool) (string, error) {
 	slog.Info("processing source", "name", src.Name, "type", src.Type, "url", src.URL, "last_version", src.LastVersion)
 
 	switch src.Type {
 	case "issues", "pulls":
-		return processGitHubItems(ctx, src, repo, dryRun)
+		return processGitHubItems(ctx, src, repo, principalRepoPath, ingestPromptPath, dryRun)
 	default:
-		return processChangelog(ctx, src, repo, dryRun)
+		return processChangelog(ctx, src, repo, principalRepoPath, ingestPromptPath, dryRun)
 	}
 }
 
 // processChangelog handles changelog-type sources (original behavior).
-func processChangelog(ctx context.Context, src Source, repo string, dryRun bool) (string, error) {
+func processChangelog(ctx context.Context, src Source, repo, principalRepoPath, ingestPromptPath string, dryRun bool) (string, error) {
 	content, err := ingest.FetchChangelog(src.URL)
 	if err != nil {
 		return "", fmt.Errorf("fetching changelog for %s: %w", src.Name, err)
@@ -124,17 +138,17 @@ func processChangelog(ctx context.Context, src Source, repo string, dryRun bool)
 	}
 
 	sourceRef := fmt.Sprintf("%s (%s)", src.URL, strings.Join(newVersions, ", "))
-	features, err := ExtractFeatures(ctx, src.Type, sourceRef, combined.String())
+	features, err := ExtractFeatures(ctx, src.Type, sourceRef, combined.String(), ingestPromptPath)
 	if err != nil {
 		return "", fmt.Errorf("extracting features for %s: %w", src.Name, err)
 	}
 
-	createProposalIssues(features, repo, src, dryRun)
+	createProposalIssues(features, repo, principalRepoPath, src, dryRun)
 	return latestVersion, nil
 }
 
 // processGitHubItems handles issues and pulls source types.
-func processGitHubItems(ctx context.Context, src Source, repo string, dryRun bool) (string, error) {
+func processGitHubItems(ctx context.Context, src Source, repo, principalRepoPath, ingestPromptPath string, dryRun bool) (string, error) {
 	sourceRepo := src.Repo
 	if sourceRepo == "" {
 		return "", fmt.Errorf("source %s has type %q but no repo field", src.Name, src.Type)
@@ -187,18 +201,18 @@ func processGitHubItems(ctx context.Context, src Source, repo string, dryRun boo
 	}
 
 	sourceRef := fmt.Sprintf("%s/%s (%s)", sourceRepo, src.Type, src.Name)
-	features, err := ExtractFeatures(ctx, src.Type, sourceRef, content.String())
+	features, err := ExtractFeatures(ctx, src.Type, sourceRef, content.String(), ingestPromptPath)
 	if err != nil {
 		return "", fmt.Errorf("extracting features for %s: %w", src.Name, err)
 	}
 
-	createProposalIssues(features, repo, src, dryRun)
+	createProposalIssues(features, repo, principalRepoPath, src, dryRun)
 	return strconv.Itoa(highestNumber), nil
 }
 
-// createProposalIssues creates proposal issues for extracted features.
-// It derives the source repo from the Source config to scope backlink suppression.
-func createProposalIssues(features []ingest.Feature, repo string, src Source, dryRun bool) {
+// createProposalIssues writes program files and creates proposal issues for extracted features.
+// principalRepoPath is the local path to the principal repo (for writing program files).
+func createProposalIssues(features []ingest.Feature, repo, principalRepoPath string, src Source, dryRun bool) {
 	sourceRepo := src.Repo
 	if sourceRepo == "" {
 		sourceRepo = sourceRepoFromURL(src.URL)
@@ -211,6 +225,8 @@ func createProposalIssues(features []ingest.Feature, repo string, src Source, dr
 
 	slog.Info("extracted features", "source", src.Name, "count", len(features))
 
+	var programPaths []string
+
 	for _, f := range features {
 		exists, err := IssueExists(repo, f.ID)
 		if err != nil {
@@ -222,7 +238,12 @@ func createProposalIssues(features []ingest.Feature, repo string, src Source, dr
 			continue
 		}
 
+		// Write program file
+		programRelPath := ".minions/programs/" + f.ID + ".md"
+		programPath := filepath.Join(principalRepoPath, programRelPath)
+
 		if dryRun {
+			fmt.Printf("[dry-run] Would create program: %s\n", programRelPath)
 			fmt.Printf("[dry-run] Would create issue: %s\n", f.Title)
 			fmt.Printf("  Feature ID: %s\n", f.ID)
 			fmt.Printf("  Target repos: %s\n", strings.Join(f.TargetRepos, ", "))
@@ -230,11 +251,31 @@ func createProposalIssues(features []ingest.Feature, repo string, src Source, dr
 			continue
 		}
 
-		issueURL, err := CreateProposalIssue(repo, f, src.Name, src.Type, sourceRepo)
+		if err := os.MkdirAll(filepath.Dir(programPath), 0o755); err != nil {
+			slog.Error("creating programs dir", "error", err)
+			continue
+		}
+		programContent := BuildProgramFile(f)
+		if err := os.WriteFile(programPath, []byte(programContent), 0o644); err != nil {
+			slog.Error("writing program file", "path", programPath, "error", err)
+			continue
+		}
+		programPaths = append(programPaths, programPath)
+		slog.Info("wrote program file", "path", programRelPath)
+
+		// Create issue referencing the program
+		issueURL, err := CreateProposalIssue(repo, f, src.Name, sourceRepo, programRelPath)
 		if err != nil {
 			slog.Error("creating proposal issue", "feature", f.ID, "error", err)
 			continue
 		}
 		slog.Info("created proposal issue", "feature", f.ID, "url", issueURL)
+	}
+
+	// Commit and push all new program files
+	if len(programPaths) > 0 {
+		if err := commitAndPushPrograms(principalRepoPath, programPaths); err != nil {
+			slog.Error("committing program files", "error", err)
+		}
 	}
 }

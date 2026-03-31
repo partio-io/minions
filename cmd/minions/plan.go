@@ -142,7 +142,7 @@ Examples:
 	return cmd
 }
 
-// loadTaskFromIssue extracts the embedded task YAML from a GitHub issue.
+// loadProgramFromIssue extracts the program path from a GitHub issue and loads it.
 func loadProgramFromIssue(repo string, issueNum int) (*program.Program, error) {
 	cmd := exec.Command("gh", "issue", "view",
 		fmt.Sprintf("%d", issueNum),
@@ -155,12 +155,14 @@ func loadProgramFromIssue(repo string, issueNum int) (*program.Program, error) {
 		return nil, fmt.Errorf("fetching issue: %w", err)
 	}
 
-	programMD := propose.ExtractProgramFromIssue(string(out))
-	if programMD == "" {
-		return nil, fmt.Errorf("no embedded program found in issue #%d", issueNum)
+	programPath := propose.ExtractProgramPathFromIssue(string(out))
+	if programPath == "" {
+		return nil, fmt.Errorf("no program reference found in issue #%d (expected <!-- program: path -->)", issueNum)
 	}
 
-	return program.Parse(programMD)
+	// Resolve path relative to workspace
+	fullPath := filepath.Join(cfg.WorkspaceRoot, proj.Principal.Name, programPath)
+	return program.LoadFile(fullPath)
 }
 
 // gatherReplanContext fetches human comments and the previous plan from an issue.
