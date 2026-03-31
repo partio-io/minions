@@ -4,6 +4,9 @@
 # Minion worktrees (created during execution)
 .minion-worktrees/
 
+# Generated plans and context reports
+.minion-plans/
+
 # Generated prompts (dry-run output)
 *.generated-prompt.md
 
