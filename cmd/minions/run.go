@@ -14,10 +14,14 @@ import (
 
 	"github.com/partio-io/minions/internal/agent"
 	appcontext "github.com/partio-io/minions/internal/context"
+	"github.com/partio-io/minions/internal/executor"
 	"github.com/partio-io/minions/internal/pipeline"
+	"github.com/partio-io/minions/internal/planner"
 	"github.com/partio-io/minions/internal/pr"
+	"github.com/partio-io/minions/internal/program"
 	"github.com/partio-io/minions/internal/prompt"
 	"github.com/partio-io/minions/internal/task"
+	"github.com/partio-io/minions/internal/workspace"
 )
 
 func newRunCmd() *cobra.Command {
@@ -28,17 +32,18 @@ func newRunCmd() *cobra.Command {
 	var contextJSON string
 	var planFile string
 	var discover bool
+	var programFile string
 
 	cmd := &cobra.Command{
 		Use:   "run [path]",
-		Short: "Execute task specs or agent types end-to-end",
-		Long: `Execute one or more task YAML files, or run a named agent type.
+		Short: "Execute task specs, agent types, or programs end-to-end",
+		Long: `Execute one or more task YAML files, a named agent type, or an .md program.
 
 Examples:
   minions run tasks/my-task.yaml
   minions run tasks/ --parallel 3
   minions run --agent doc-updater --pr my-org/my-repo#42
-  minions run --agent readme-updater --pr my-org/my-repo#42`,
+  minions run --program programs/detect-hooks.md`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -54,6 +59,11 @@ Examples:
 					return fmt.Errorf("getting working directory: %w", err)
 				}
 				workspaceRoot = filepath.Dir(wd)
+			}
+
+			// Program mode: --program flag specified
+			if programFile != "" {
+				return runProgram(ctx, programFile, workspaceRoot, dryRun)
 			}
 
 			// Agent mode: --agent flag specified
@@ -95,6 +105,7 @@ Examples:
 	cmd.Flags().StringVar(&contextJSON, "context", "", "JSON context for the agent")
 	cmd.Flags().StringVar(&planFile, "plan-file", "", "path to a plan file to include as context")
 	cmd.Flags().BoolVar(&discover, "discover", false, "discover tasks from .minions/tasks/ in all project repos")
+	cmd.Flags().StringVar(&programFile, "program", "", "path to an .md program file")
 
 	return cmd
 }
@@ -403,6 +414,120 @@ func debugDirForTask(taskID string) string {
 	dir := filepath.Join(base, taskID)
 	os.MkdirAll(dir, 0755)
 	return dir
+}
+
+// runProgram parses and executes an .md program file.
+func runProgram(ctx context.Context, programPath, workspaceRoot string, dryRun bool) error {
+	// 1. Parse program
+	prog, err := program.LoadFile(programPath)
+	if err != nil {
+		return err
+	}
+	if err := prog.Validate(); err != nil {
+		return fmt.Errorf("invalid program: %w", err)
+	}
+
+	fmt.Println("==========================================")
+	fmt.Printf("PROGRAM: %s\n", prog.ID)
+	fmt.Printf("TITLE: %s\n", prog.Title)
+	fmt.Printf("TARGET REPOS: %v\n", prog.AllTargetRepos())
+	fmt.Printf("AGENTS: %d\n", len(prog.Agents))
+	fmt.Printf("DRY RUN: %v\n", dryRun)
+	fmt.Println("==========================================")
+
+	// 2. Ensure repos are available
+	if proj == nil {
+		return fmt.Errorf("project config required: ensure .minions/project.yaml exists in the workspace")
+	}
+	allRepos := prog.AllTargetRepos()
+	if err := workspace.EnsureRepos(proj, workspaceRoot, allRepos); err != nil {
+		return fmt.Errorf("ensuring repos: %w", err)
+	}
+
+	// 3. Create context tracker
+	tracker := appcontext.NewTracker(prog.ID)
+
+	// 4. Run planner (if defined)
+	var planText string
+	if prog.Planner != nil {
+		fmt.Println("\n--- Planning Phase ---")
+		planResult, err := planner.Run(ctx, planner.Opts{
+			Program:       prog,
+			WorkspaceRoot: workspaceRoot,
+			Project:       proj,
+			Tracker:       tracker,
+			DryRun:        dryRun,
+			DebugDir:      debugDirForTask(prog.ID),
+		})
+		if err != nil {
+			return fmt.Errorf("planning failed: %w", err)
+		}
+		planText = planResult.Plan
+		if planResult.PlanPath != "" {
+			fmt.Printf("Plan saved to: %s\n", planResult.PlanPath)
+		}
+		if planResult.Questions != "" {
+			fmt.Printf("\nPlanner questions:\n%s\n", planResult.Questions)
+		}
+	}
+
+	if dryRun {
+		report := tracker.Report()
+		report.PrintSummary()
+		return nil
+	}
+
+	// 5. Run executor
+	fmt.Println("\n--- Execution Phase ---")
+	result, err := executor.Run(ctx, executor.Opts{
+		Program:       prog,
+		PlanText:      planText,
+		WorkspaceRoot: workspaceRoot,
+		Project:       proj,
+		Tracker:       tracker,
+		DryRun:        dryRun,
+		DebugDir:      debugDirForTask(prog.ID),
+	})
+	if err != nil {
+		return fmt.Errorf("execution failed: %w", err)
+	}
+
+	// 6. Print results
+	fmt.Println("\n==========================================")
+	fmt.Printf("PROGRAM COMPLETE: %s\n", prog.ID)
+	var allPRs []string
+	var anyFailed bool
+	for _, ar := range result.AgentResults {
+		if ar.Error != nil {
+			fmt.Printf("  FAILED: %s — %v\n", ar.AgentName, ar.Error)
+			anyFailed = true
+		} else if ar.Skipped {
+			fmt.Printf("  SKIPPED: %s — %s\n", ar.AgentName, ar.SkipReason)
+		} else {
+			for _, url := range ar.PRURLs {
+				fmt.Printf("  PR: %s (%s)\n", url, ar.AgentName)
+				allPRs = append(allPRs, url)
+			}
+		}
+	}
+	fmt.Println("==========================================")
+
+	// 7. Print context report
+	report := tracker.Report()
+	report.PrintSummary()
+
+	// Write JSON report to debug dir
+	if debugDir := debugDirForTask(prog.ID); debugDir != "" {
+		_ = report.WriteJSON(filepath.Join(debugDir, "context-report.json"))
+	}
+
+	if anyFailed {
+		return fmt.Errorf("one or more agents failed")
+	}
+	if len(allPRs) == 0 {
+		slog.Warn("no PRs created by any agent")
+	}
+	return nil
 }
 
 func runParallel(ctx context.Context, tasks []*task.Task, workspaceRoot string, dryRun bool, maxParallel int, planText string) bool {
