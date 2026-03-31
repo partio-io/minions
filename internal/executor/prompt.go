@@ -13,7 +13,7 @@ import (
 )
 
 // buildAgentPrompt constructs the prompt for a sub-agent execution.
-func buildAgentPrompt(prog *program.Program, agent *program.AgentDef, planText, workspaceRoot string, proj *project.Project, pt *context.PhaseTracker) string {
+func buildAgentPrompt(prog *program.Program, agent *program.AgentDef, planText, issueContext, workspaceRoot string, proj *project.Project, pt *context.PhaseTracker) string {
 	var b strings.Builder
 	repos := prog.EffectiveTargetRepos(agent)
 
@@ -21,6 +21,13 @@ func buildAgentPrompt(prog *program.Program, agent *program.AgentDef, planText, 
 	header := fmt.Sprintf("# Minion Task: %s\n\nYou are a coding agent executing a task autonomously. Complete the task in a single session without human interaction.\n\n", prog.Title)
 	b.WriteString(header)
 	pt.AddContext("template:header", header)
+
+	// Issue context (from --issue flag)
+	if issueContext != "" {
+		issueSection := "## Issue\n\n" + issueContext + "\n\n"
+		b.WriteString(issueSection)
+		pt.AddContext("issue", issueContext)
+	}
 
 	// Plan context
 	if planText != "" {

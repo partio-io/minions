@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -18,15 +20,18 @@ import (
 
 func newRunCmd() *cobra.Command {
 	var dryRun bool
+	var issueRef string
 
 	cmd := &cobra.Command{
 		Use:   "run <program.md>",
 		Short: "Execute a program",
-		Long: `Execute an .md program file.
+		Long: `Execute an .md program file, optionally with a GitHub issue as context.
 
 Examples:
-  minions run programs/detect-hooks.md
-  minions run .minions/programs/my-feature.md --dry-run`,
+  minions run .minions/programs/implement.md --issue 120
+  minions run .minions/programs/implement.md --issue partio-io/cli#120
+  minions run .minions/programs/propose.md
+  minions run .minions/programs/implement.md --issue 120 --dry-run`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -44,13 +49,50 @@ Examples:
 				workspaceRoot = filepath.Dir(wd)
 			}
 
-			return runProgram(ctx, args[0], workspaceRoot, dryRun)
+			// Fetch issue context if --issue is provided
+			var issueContext string
+			if issueRef != "" {
+				var err error
+				issueContext, err = fetchIssue(issueRef)
+				if err != nil {
+					return fmt.Errorf("fetching issue: %w", err)
+				}
+			}
+
+			return runProgram(ctx, args[0], workspaceRoot, issueContext, dryRun)
 		},
 	}
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview generated prompt without executing")
+	cmd.Flags().StringVar(&issueRef, "issue", "", "GitHub issue number or reference (e.g., 120 or org/repo#120)")
 
 	return cmd
+}
+
+// fetchIssue fetches an issue's title and body via gh CLI.
+// Accepts either a bare number (uses principal repo) or a full reference (org/repo#123).
+func fetchIssue(ref string) (string, error) {
+	var repo, number string
+
+	if strings.Contains(ref, "#") {
+		parts := strings.SplitN(ref, "#", 2)
+		repo = parts[0]
+		number = parts[1]
+	} else {
+		// Bare number — use principal repo from project config
+		if proj == nil {
+			return "", fmt.Errorf("--issue with bare number requires project config (pass org/repo#number or ensure .minions/project.yaml exists)")
+		}
+		repo = proj.PrincipalFullName()
+		number = ref
+	}
+
+	cmd := exec.Command("gh", "issue", "view", number, "--repo", repo, "--json", "title,body", "--jq", `"# " + .title + "\n\n" + .body`)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("gh issue view %s --repo %s: %w", number, repo, err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func debugDirForTask(taskID string) string {
@@ -63,7 +105,7 @@ func debugDirForTask(taskID string) string {
 	return dir
 }
 
-func runProgram(ctx context.Context, programPath, workspaceRoot string, dryRun bool) error {
+func runProgram(ctx context.Context, programPath, workspaceRoot, issueContext string, dryRun bool) error {
 	prog, err := program.LoadFile(programPath)
 	if err != nil {
 		return err
@@ -77,6 +119,9 @@ func runProgram(ctx context.Context, programPath, workspaceRoot string, dryRun b
 	fmt.Printf("TITLE: %s\n", prog.Title)
 	fmt.Printf("TARGET REPOS: %v\n", prog.AllTargetRepos())
 	fmt.Printf("AGENTS: %d\n", len(prog.Agents))
+	if issueContext != "" {
+		fmt.Println("ISSUE: provided")
+	}
 	fmt.Printf("DRY RUN: %v\n", dryRun)
 	fmt.Println("==========================================")
 
@@ -124,6 +169,7 @@ func runProgram(ctx context.Context, programPath, workspaceRoot string, dryRun b
 	result, err := executor.Run(ctx, executor.Opts{
 		Program:       prog,
 		PlanText:      planText,
+		IssueContext:  issueContext,
 		WorkspaceRoot: workspaceRoot,
 		Project:       proj,
 		Tracker:       tracker,
