@@ -17,27 +17,35 @@ type CreateOpts struct {
 }
 
 // Create stages, commits, pushes, and creates a PR for a minion's work.
+// Handles both uncommitted changes (stages + commits) and pre-committed changes (just pushes).
 // principalRepo is the full name of the principal repo (used in commit messages/PR bodies).
 // Returns the PR URL or empty string if no changes.
 func Create(worktreePath, repoFullName, taskID, title, description, why string, labels []string, principalRepo string, opts *CreateOpts) (string, error) {
-	// Check for changes
+	branchName := "minion/" + taskID
+
+	// Check for uncommitted changes
 	status, _ := git.ExecGitDir(worktreePath, "status", "--porcelain")
-	if strings.TrimSpace(status) == "" {
+	hasUncommitted := strings.TrimSpace(status) != ""
+
+	// Check for new commits (Claude may have committed already)
+	logOut, _ := git.ExecGitDir(worktreePath, "log", "HEAD", "--not", "--remotes", "--oneline")
+	hasNewCommits := strings.TrimSpace(logOut) != ""
+
+	if !hasUncommitted && !hasNewCommits {
 		slog.Info("no changes", "repo", filepath.Base(worktreePath))
 		return "", nil
 	}
 
-	branchName := "minion/" + taskID
+	// Stage and commit only if there are uncommitted changes
+	if hasUncommitted {
+		if _, err := git.ExecGitDir(worktreePath, "add", "-A"); err != nil {
+			return "", fmt.Errorf("staging changes: %w", err)
+		}
 
-	// Stage all changes
-	if _, err := git.ExecGitDir(worktreePath, "add", "-A"); err != nil {
-		return "", fmt.Errorf("staging changes: %w", err)
-	}
-
-	// Commit
-	commitMsg := fmt.Sprintf("%s\n\nAutomated by %s (task: %s)\n\nCo-Authored-By: Claude <noreply@anthropic.com>", title, principalRepo, taskID)
-	if _, err := git.ExecGitDir(worktreePath, "commit", "-m", commitMsg); err != nil {
-		return "", fmt.Errorf("committing changes: %w", err)
+		commitMsg := fmt.Sprintf("%s\n\nAutomated by %s (task: %s)\n\nCo-Authored-By: Claude <noreply@anthropic.com>", title, principalRepo, taskID)
+		if _, err := git.ExecGitDir(worktreePath, "commit", "-m", commitMsg); err != nil {
+			return "", fmt.Errorf("committing changes: %w", err)
+		}
 	}
 
 	// Push
