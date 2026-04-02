@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -297,11 +298,14 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 		return AgentResult{AgentName: agent.Name, Error: fmt.Errorf("project config required for PR creation")}
 	}
 
+	// Summarize changes for PR title and description
+	prTitle, prDescription := summarizeChanges(ctx, claudeCWD, prog, opts.IssueContext)
+
 	prOpts := &pr.CreateOpts{
 		AcceptanceCriteria: prog.AcceptanceCriteria,
 		Source:             prog.Source,
 	}
-	prURLs, err := pr.CreateAndLinkAll(taskID, prog.Title, prog.Description, "", opts.WorkspaceRoot, labelsCSV, worktreeRepos, fullNameFn, principalRepo, prOpts)
+	prURLs, err := pr.CreateAndLinkAll(taskID, prTitle, prDescription, "", opts.WorkspaceRoot, labelsCSV, worktreeRepos, fullNameFn, principalRepo, prOpts)
 	if err != nil {
 		cleanup()
 		return AgentResult{AgentName: agent.Name, Error: fmt.Errorf("PR creation failed: %w", err)}
@@ -366,6 +370,75 @@ func buildMCPServers(mcps []program.MCPDef) map[string]claudesdk.MCPServerConfig
 		}
 	}
 	return servers
+}
+
+// summarizeChanges runs a cheap Claude call to generate a PR title and description from the diff.
+func summarizeChanges(ctx gocontext.Context, cwd string, prog *program.Program, issueContext string) (title, description string) {
+	// Get the diff
+	diffCmd := exec.Command("git", "diff", "HEAD")
+	diffCmd.Dir = cwd
+	diffOut, err := diffCmd.Output()
+	if err != nil || len(diffOut) == 0 {
+		// Fallback: try diff of staged + unstaged
+		diffCmd = exec.Command("git", "diff")
+		diffCmd.Dir = cwd
+		diffOut, _ = diffCmd.Output()
+	}
+
+	diff := string(diffOut)
+	if len(diff) > 20000 {
+		diff = diff[:20000] + "\n... (truncated)"
+	}
+
+	var prompt strings.Builder
+	prompt.WriteString("You are writing a PR title and description for a code change. Be concise and specific.\n\n")
+
+	if issueContext != "" {
+		prompt.WriteString("## Original Issue\n\n")
+		prompt.WriteString(issueContext)
+		prompt.WriteString("\n\n")
+	}
+
+	prompt.WriteString("## Diff\n\n```\n")
+	prompt.WriteString(diff)
+	prompt.WriteString("\n```\n\n")
+	prompt.WriteString("Write a PR title and description. Format your response EXACTLY as:\n\n")
+	prompt.WriteString("TITLE: <concise PR title, no prefix like [minion]>\n\n")
+	prompt.WriteString("DESCRIPTION:\n<what was implemented, key decisions, how to test>\n")
+
+	fmt.Println("--- Summarizing changes for PR ---")
+	result, err := claude.Run(ctx, claude.Opts{
+		Prompt:   prompt.String(),
+		CWD:      cwd,
+		MaxTurns: 1,
+	})
+	if err != nil || result.ResultText == "" {
+		slog.Warn("failed to summarize changes, using program title", "error", err)
+		return prog.Title, prog.Description
+	}
+
+	return parseSummary(result.ResultText, prog.Title, prog.Description)
+}
+
+// parseSummary extracts title and description from the summarize response.
+func parseSummary(text, fallbackTitle, fallbackDesc string) (string, string) {
+	title := fallbackTitle
+	desc := fallbackDesc
+
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "TITLE:") {
+			title = strings.TrimSpace(strings.TrimPrefix(line, "TITLE:"))
+		}
+		if strings.HasPrefix(line, "DESCRIPTION:") {
+			// Everything after DESCRIPTION: line
+			rest := strings.Join(lines[i+1:], "\n")
+			desc = strings.TrimSpace(rest)
+			break
+		}
+	}
+
+	return title, desc
 }
 
 // runChecks runs deterministic checks on worktree paths.
