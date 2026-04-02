@@ -223,13 +223,21 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 		}
 	}
 
-	// Check for changes
+	// Check for changes — both uncommitted and committed
 	hasChanges := false
 	for i, wtPath := range worktreePaths {
+		// Check uncommitted changes
 		status, _ := git.ExecGitDir(wtPath, "status", "--porcelain")
 		if strings.TrimSpace(status) != "" {
 			hasChanges = true
-			slog.Info("worktree has changes", "agent", agent.Name, "repo", worktreeRepos[i])
+			slog.Info("worktree has uncommitted changes", "agent", agent.Name, "repo", worktreeRepos[i])
+			continue
+		}
+		// Check if there are new commits on the worktree branch vs the base
+		log, _ := git.ExecGitDir(wtPath, "log", "HEAD", "--not", "--remotes", "--oneline")
+		if strings.TrimSpace(log) != "" {
+			hasChanges = true
+			slog.Info("worktree has new commits", "agent", agent.Name, "repo", worktreeRepos[i])
 		}
 	}
 	if !hasChanges {
