@@ -181,13 +181,14 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 	}
 
 	result, err := claude.Run(ctx, claude.Opts{
-		Prompt:       promptText,
-		CWD:          claudeCWD,
-		MaxTurns:     maxTurns,
-		AllowedTools: strings.Join(tools, ","),
-		MaxBudgetUSD: agent.MaxBudgetUSD,
-		MCPServers:   mcpServers,
-		LogFile:      logFile,
+		Prompt:         promptText,
+		CWD:            claudeCWD,
+		MaxTurns:       maxTurns,
+		AllowedTools:   strings.Join(tools, ","),
+		PermissionMode: "bypassPermissions",
+		MaxBudgetUSD:   agent.MaxBudgetUSD,
+		MCPServers:     mcpServers,
+		LogFile:        logFile,
 	})
 	if err != nil {
 		cleanup()

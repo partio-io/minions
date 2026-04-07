@@ -104,6 +104,15 @@ func Run(ctx context.Context, opts Opts) (*Result, error) {
 		"subtype", result.Subtype,
 	)
 
+	if result.ResultText != "" {
+		// Log first 500 chars of result text for debugging
+		preview := result.ResultText
+		if len(preview) > 500 {
+			preview = preview[:500] + "..."
+		}
+		slog.Info("claude result text", "preview", preview)
+	}
+
 	// Write result to log file for debug observability
 	if opts.LogFile != "" {
 		if data, err := json.Marshal(resultMsg); err == nil {
