@@ -228,14 +228,21 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 	for i, wtPath := range worktreePaths {
 		// Check uncommitted changes
 		status, _ := git.ExecGitDir(wtPath, "status", "--porcelain")
+		slog.Info("worktree status", "agent", agent.Name, "repo", worktreeRepos[i], "status", strings.TrimSpace(status))
 		if strings.TrimSpace(status) != "" {
 			hasChanges = true
 			slog.Info("worktree has uncommitted changes", "agent", agent.Name, "repo", worktreeRepos[i])
 			continue
 		}
 		// Check if there are new commits on the worktree branch vs the base
-		log, _ := git.ExecGitDir(wtPath, "log", "HEAD", "--not", "--remotes", "--oneline")
-		if strings.TrimSpace(log) != "" {
+		logOut, _ := git.ExecGitDir(wtPath, "log", "HEAD", "--not", "--remotes", "--oneline")
+		slog.Info("worktree log", "agent", agent.Name, "repo", worktreeRepos[i], "log", strings.TrimSpace(logOut))
+
+		// Also check diff against origin/main or origin/HEAD
+		diffStat, _ := git.ExecGitDir(wtPath, "diff", "--stat", "origin/HEAD...HEAD")
+		slog.Info("worktree diff vs origin", "agent", agent.Name, "repo", worktreeRepos[i], "diff_stat", strings.TrimSpace(diffStat))
+
+		if strings.TrimSpace(logOut) != "" || strings.TrimSpace(diffStat) != "" {
 			hasChanges = true
 			slog.Info("worktree has new commits", "agent", agent.Name, "repo", worktreeRepos[i])
 		}
@@ -418,7 +425,7 @@ func summarizeChanges(ctx gocontext.Context, cwd string, prog *program.Program, 
 	result, err := claude.Run(ctx, claude.Opts{
 		Prompt:   prompt.String(),
 		CWD:      cwd,
-		MaxTurns: 1,
+		MaxTurns: 5,
 	})
 	if err != nil || result.ResultText == "" {
 		slog.Warn("failed to summarize changes, using program title", "error", err)
