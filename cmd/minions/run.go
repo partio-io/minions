@@ -50,16 +50,16 @@ Examples:
 			}
 
 			// Fetch issue context if --issue is provided
-			var issueContext string
+			var issueContext, issueNumber string
 			if issueRef != "" {
 				var err error
-				issueContext, err = fetchIssue(issueRef)
+				issueContext, issueNumber, err = fetchIssue(issueRef)
 				if err != nil {
 					return fmt.Errorf("fetching issue: %w", err)
 				}
 			}
 
-			return runProgram(ctx, args[0], workspaceRoot, issueContext, dryRun)
+			return runProgram(ctx, args[0], workspaceRoot, issueContext, issueNumber, dryRun)
 		},
 	}
 
@@ -69,9 +69,11 @@ Examples:
 	return cmd
 }
 
-// fetchIssue fetches an issue's title and body via gh CLI.
-// Accepts either a bare number (uses principal repo) or a full reference (org/repo#123).
-func fetchIssue(ref string) (string, error) {
+// fetchIssue fetches an issue's title and body via gh CLI and returns the
+// parsed issue number alongside the body. Accepts either a bare number (uses
+// principal repo) or a full reference (org/repo#123). The number is returned
+// so the caller can make the per-build taskID/branch unique.
+func fetchIssue(ref string) (string, string, error) {
 	var repo, number string
 
 	if strings.Contains(ref, "#") {
@@ -81,7 +83,7 @@ func fetchIssue(ref string) (string, error) {
 	} else {
 		// Bare number — use principal repo from project config
 		if proj == nil {
-			return "", fmt.Errorf("--issue with bare number requires project config (pass org/repo#number or ensure .minions/project.yaml exists)")
+			return "", "", fmt.Errorf("--issue with bare number requires project config (pass org/repo#number or ensure .minions/project.yaml exists)")
 		}
 		repo = proj.PrincipalFullName()
 		number = ref
@@ -90,9 +92,9 @@ func fetchIssue(ref string) (string, error) {
 	cmd := exec.Command("gh", "issue", "view", number, "--repo", repo, "--json", "title,body", "--jq", `"# " + .title + "\n\n" + .body`)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("gh issue view %s --repo %s: %w", number, repo, err)
+		return "", "", fmt.Errorf("gh issue view %s --repo %s: %w", number, repo, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return strings.TrimSpace(string(out)), number, nil
 }
 
 func debugDirForTask(taskID string) string {
@@ -105,7 +107,7 @@ func debugDirForTask(taskID string) string {
 	return dir
 }
 
-func runProgram(ctx context.Context, programPath, workspaceRoot, issueContext string, dryRun bool) error {
+func runProgram(ctx context.Context, programPath, workspaceRoot, issueContext, issueRef string, dryRun bool) error {
 	prog, err := program.LoadFile(programPath)
 	if err != nil {
 		return err
@@ -170,6 +172,7 @@ func runProgram(ctx context.Context, programPath, workspaceRoot, issueContext st
 		Program:       prog,
 		PlanText:      planText,
 		IssueContext:  issueContext,
+		IssueRef:      issueRef,
 		WorkspaceRoot: workspaceRoot,
 		Project:       proj,
 		Tracker:       tracker,

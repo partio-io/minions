@@ -26,6 +26,7 @@ type Opts struct {
 	Program       *program.Program
 	PlanText      string
 	IssueContext  string // fetched issue body, injected into prompt
+	IssueRef      string // issue number (e.g. "437"); appended to taskID so each build gets its own branch/PR
 	WorkspaceRoot string
 	Project       *project.Project
 	Tracker       *pcontext.Tracker
@@ -88,10 +89,22 @@ func Run(ctx gocontext.Context, opts Opts) (*Result, error) {
 	return result, nil
 }
 
+// buildTaskID derives the per-run task identifier used for the worktree path
+// and the PR branch name (minion/<taskID>). When an issue reference is present
+// it is appended, so each issue-triggered build gets its own branch and PR
+// instead of colliding on a single shared branch shared across every run.
+func buildTaskID(progID, agentName, issueRef string) string {
+	id := progID + "-" + agentName
+	if issueRef != "" {
+		id += "-" + issueRef
+	}
+	return id
+}
+
 // runAgent executes a single sub-agent.
 func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *program.AgentDef) AgentResult {
 	repos := prog.EffectiveTargetRepos(agent)
-	taskID := prog.ID + "-" + agent.Name
+	taskID := buildTaskID(prog.ID, agent.Name, opts.IssueRef)
 	multiRepo := len(repos) > 1
 
 	// Start context tracking
