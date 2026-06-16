@@ -3,6 +3,15 @@
 **Source PRD**: [../prd.md](../prd.md)
 **Blocked by**: [04 — slicer agent + child issues + status comment](./04-slicer-child-issues.md)
 
+> **Premise revised — see slice [#07](./07-slice-plan-comment-manual-build.md).**
+> Written when a run produced three artifact types (PRD comment, child
+> issues, status comment). Under the shipped design a run produces only
+> **two comments** on the parent — the PRD comment (`minion:research
+> run-id=`) and the slice-plan comment (`minion:research-slices
+> parent=#N`) — and no child issues. The skip-if-marker-exists work still
+> applies, but only to those two comments; the child-issue and
+> status-comment markers below are obsolete. Not yet built.
+
 ## What to build
 
 Make `research.md` safe to re-run against the same parent issue

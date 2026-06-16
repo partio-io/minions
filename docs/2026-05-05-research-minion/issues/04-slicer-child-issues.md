@@ -3,6 +3,14 @@
 **Source PRD**: [../prd.md](../prd.md)
 **Blocked by**: [03 — prd-writer agent + PRD comment + parent label](./03-prd-writer-comment-label.md)
 
+> **Superseded by slice [#07](./07-slice-plan-comment-manual-build.md).**
+> This slice was built and merged (partio-io/cli#404), then **replaced**:
+> the child-issue + auto-cascade approach below proliferated issues and
+> collided feature PRs on a shared branch. The shipped design posts the
+> slice plan as a *comment* on the parent and triggers implementation
+> manually as a single PR. Kept as history; the acceptance criteria below
+> describe behavior that has since been removed.
+
 ## What to build
 
 Add a `slicer` sub-agent that runs between `prd-writer` and

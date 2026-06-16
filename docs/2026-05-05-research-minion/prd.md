@@ -1,5 +1,27 @@
 # research-minion
 
+> **Design revised (2026-06) — shipped.** This PRD was written for a
+> *child-issue* design: the publisher opened one GitHub issue per slice,
+> each pre-labeled `minion-approved`, so `minion.yml` cascaded
+> `implement.md` per child. That was built (slice #4) and then
+> **replaced** — it proliferated issues and split one feature across many
+> PRs. The shipped design instead:
+> - **Research output is comments only.** The publisher posts the PRD as
+>   one comment and the slice plan as a second comment on the parent;
+>   it opens **no** child issues and applies **no** `minion-approved`.
+> - **Implementation is a manual, single-PR step.** jcleira labels the
+>   parent `minion-approved` (or `/minion build`) when ready; `implement.md`
+>   runs once on the parent and produces **one** feature PR.
+> - Each build gets its **own** branch `minion/<prog>-<agent>-<issue>`
+>   (minions ≥ v0.0.6), so builds never collide on a shared branch/PR.
+>
+> Shipped via partio-io/cli#436, partio-io/minions#130 + release v0.0.6,
+> and partio-io/cli#439. The current design is slice
+> [#07](./issues/07-slice-plan-comment-manual-build.md). Sections below
+> that describe child issues or the auto-cascade (Solution, several User
+> Stories, Idempotency contract, Build/Auto-cascade trigger semantics,
+> Specific interactions) predate this revision and are kept for history.
+
 ## Problem Statement
 
 The current minion system handles small, well-specified tasks well: a human files an issue on `partio-io/cli`, labels it `minion-approved` (or comments `/minion build`), and `implement.md` runs unattended to produce a PR. That fast path is sufficient when the spec is tight and the change is small.
@@ -19,10 +41,10 @@ A new GitHub label `minion-research` (or comment `/minion research`) on a parent
 1. **researcher** — drives an interview in the style of `/code-research`, walking the decision tree and writing Q&A to a transcript file in the worktree.
 2. **persona** — answers each question as jcleira would, grounded in argos's full `telos/*.md` (~5K chars) and `memory/*.md` (~120K chars across 48 files). Cloned fresh from `git@github.com:jcleira/argos.git` (master branch) into the workspace at workflow start. Strict directive in the prompt: use the substrate to *decide*, never quote or paraphrase personal content in any output.
 3. **prd-writer** — synthesizes the transcript into a PRD body.
-4. **slicer** — breaks the PRD into vertical-slice descriptions, one per child issue.
-5. **publisher** — uses the `gh` CLI to: post the PRD as a comment on the parent issue, open one child issue per slice, label parent with `minion-research-completed`, and post a status comment with child issue links.
+4. **slicer** — breaks the PRD into vertical-slice descriptions, one block per slice.
+5. **publisher** — uses the `gh` CLI to: post the PRD as a comment on the parent issue, post the slice plan as a second comment, and label the parent `minion-research-completed`. (Originally: opened one child issue per slice plus a status comment — replaced; see the Design-revised banner above.)
 
-Child issues are created with two labels: `minion-approved` (so the existing `minion.yml` workflow auto-fires `implement.md` for each) and `minion-research-output` (provenance, for filtering). The auto-fire cascade is intentional: jcleira approves the original parent issue once, and the system runs research → decomposition → implementation without further intervention. The only manual gate is final PR review — same as today's simple-task flow.
+The research run produces review artifacts only — no child issues, no `minion-approved`, no implementation. When jcleira is ready he labels the parent `minion-approved` (or comments `/minion build`); `minion.yml` then fires `implement.md` once on the parent and produces a single feature PR. The manual gate is deliberate: jcleira reviews the PRD + slice plan before any code is written.
 
 All artifacts stay on GitHub Issues and Pull Requests; no `docs/.../prd.md` or `docs/.../issues/*.md` files get committed. Idempotency markers (`<!-- minion:research run-id=<sha> -->` on the PRD comment, `<!-- minion:slice parent=#N -->` on child issue bodies) let re-runs detect existing artifacts and avoid duplication.
 
@@ -97,11 +119,12 @@ Three markers, each a single HTML comment line:
 
 The publisher agent's prompt instructs it to query the parent issue's existing comments via `gh issue view --json comments` and skip writing comments whose marker matches an existing one (regenerating instead).
 
-### Auto-cascade trigger semantics
+### Build trigger semantics (revised — see banner)
 
-- `minion-research` label OR `/minion research` comment on parent issue → fires `research.yml`.
-- `research.md`'s slicer agent creates child issues with `minion-approved` + `minion-research-output` labels. The `minion-approved` label is the existing trigger for `minion.yml`, so each child issue auto-fires `implement.md`.
-- No new wiring is needed between research and implement — they compose via the existing label.
+- `minion-research` label OR `/minion research` comment on parent issue → fires `research.yml`, which posts the PRD + slice-plan comments and stops.
+- Implementation is **not** auto-cascaded. When jcleira is ready he labels the **parent** `minion-approved` (or comments `/minion build`); `minion.yml` fires `implement.md` once on the parent → one feature PR.
+- Each build gets a unique branch `minion/<prog>-<agent>-<issue>` (minions ≥ v0.0.6), so re-runs and separate features never share a branch/PR.
+- (Originally: the slicer created child issues each pre-labeled `minion-approved`, auto-firing `implement.md` per child. Replaced — it proliferated issues and collided PRs on a shared branch.)
 
 ### Architectural decisions
 

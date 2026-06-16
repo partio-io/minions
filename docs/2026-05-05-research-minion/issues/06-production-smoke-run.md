@@ -3,6 +3,15 @@
 **Source PRD**: [../prd.md](../prd.md)
 **Blocked by**: [05 — Idempotency: re-runs skip existing artifacts](./05-idempotency-rerun-skip.md)
 
+> **Procedure revised — see slice [#07](./07-slice-plan-comment-manual-build.md).**
+> The shipped design has no auto-cascade to pause, so the "remove
+> `minion-approved` from each child before it fires" step below is
+> obsolete. The current smoke is: label the parent `minion-research` →
+> verify the PRD + slice-plan comments → then label the parent
+> `minion-approved` to produce one feature PR. A dry run of exactly this
+> was done end-to-end on partio-io/cli#437 (→ PR #443). Not yet run
+> against a real `minion-proposal` issue.
+
 ## What to build
 
 This slice is operational, not code. Pick a small, well-scoped parent
