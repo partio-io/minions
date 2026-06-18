@@ -71,17 +71,17 @@ the in-repo substrate exists.
 
 ## Acceptance criteria
 
-- [ ] `research.yml` does not clone argos and references no `ARGOS_PAT`
+- [x] `research.yml` does not clone argos and references no `ARGOS_PAT`
   (verify; shipped in #454).
-- [ ] An in-repo `telos` + `memory` substrate exists in `partio-io/cli`
+- [x] An in-repo `telos` + `memory` substrate exists in `partio-io/cli`
   and contains no personal data (privacy review of the committed files).
-- [ ] `research.md`'s `persona` reads only the in-repo substrate; no
+- [x] `research.md`'s `persona` reads only the in-repo substrate; no
   `argos` path or clone reference remains anywhere in `research.md`.
 - [ ] A research run on a test issue with **no network access to argos**
   still produces a substantive PRD grounded in the in-repo substrate.
 - [ ] Privacy review of that run's public comments: no personal data,
   no verbatim substrate dumps.
-- [ ] The persona privacy directive is still present in the prompt.
+- [x] The persona privacy directive is still present in the prompt.
 
 ## Modules touched
 
