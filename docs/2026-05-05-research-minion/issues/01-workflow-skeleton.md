@@ -7,14 +7,14 @@
 
 A new minion path on `partio-io/cli` that fires when a parent issue is
 labeled `minion-research` (or commented `/minion research`). The
-workflow clones `jcleira/argos` into the runner workspace, then runs
+workflow clones the private source repo into the runner workspace, then runs
 `minions run .minions/programs/research.md --issue <N>`. At this slice,
 `research.md` contains a single trivial agent that uses `gh` to post a
 "research started — run-id `<sha7>`" comment on the parent issue and
 exit. No PRD, no children, no further sub-agents yet.
 
 This is the tracer bullet: it proves the wire end-to-end (label →
-workflow trigger → author_association gate → argos clone via PAT →
+workflow trigger → author_association gate → private-source clone via PAT →
 minions runtime → multi-agent program parsing → gh side effect on
 issue) before any real research logic is added.
 
@@ -28,7 +28,7 @@ cron are not modified.
   descriptions follow the existing minion-label convention in the
   repo.
 - [ ] `secrets.GH_PAT` on `partio-io/cli` is scoped to read
-  `jcleira/argos` (private repo). Verified by a successful clone in a
+  the private source repo (private repo). Verified by a successful clone in a
   workflow run.
 - [ ] `.github/workflows/research.yml` exists on `partio-io/cli` with:
   - Triggers: `issues.labeled` (gated to `minion-research`), and
@@ -42,8 +42,8 @@ cron are not modified.
   - `runs-on: github-runner-partio-minion-ai-01` (same self-hosted
     runner as `minion.yml`).
   - `timeout-minutes: 90`.
-  - A step that clones `git@github.com:jcleira/argos.git` (master
-    branch) into `${{ github.workspace }}/argos/` using
+  - A step that clones the private source repo (master
+    branch) into `${{ github.workspace }}/private-source/` using
     `secrets.GH_PAT`.
   - Reuses the existing `Install minions` step pattern (go install
     `github.com/partio-io/minions/cmd/minions@<pinned-version>`).
@@ -65,7 +65,7 @@ cron are not modified.
     id.
 - [ ] Smoke run: a test issue on `partio-io/cli` labeled
   `minion-research` causes the workflow to fire, the workflow log
-  shows the argos clone step succeeding (and prints the argos SHA),
+  shows the private-source clone step succeeding (and prints the private-source SHA),
   and a comment from the runner appears on the parent issue.
 - [ ] `minion.yml`, `propose.yml`, `propose.md`, `implement.md`,
   `approve.md`, `doc-update.md`, `readme-update.md`, `ingest.md` are

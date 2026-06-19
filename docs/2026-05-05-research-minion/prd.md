@@ -39,7 +39,7 @@ A new minion path for complex tasks runs the full research → PRD → slice →
 A new GitHub label `minion-research` (or comment `/minion research`) on a parent issue triggers a new workflow `research.yml` on partio-io/cli. That workflow fires `research.md`, a multi-agent program with five sub-agents:
 
 1. **researcher** — drives an interview in the style of `/code-research`, walking the decision tree and writing Q&A to a transcript file in the worktree.
-2. **persona** — answers each question as jcleira would, grounded in argos's full `telos/*.md` (~5K chars) and `memory/*.md` (~120K chars across 48 files). Cloned fresh from `git@github.com:jcleira/argos.git` (master branch) into the workspace at workflow start. Strict directive in the prompt: use the substrate to *decide*, never quote or paraphrase personal content in any output.
+2. **persona** — answers each question as jcleira would, grounded in the private source repo's full `telos/*.md` (~5K chars) and `memory/*.md` (~120K chars across 48 files). Cloned fresh from the private source repo (master branch) into the workspace at workflow start. Strict directive in the prompt: use the substrate to *decide*, never quote or paraphrase personal content in any output.
 3. **prd-writer** — synthesizes the transcript into a PRD body.
 4. **slicer** — breaks the PRD into vertical-slice descriptions, one block per slice.
 5. **publisher** — uses the `gh` CLI to: post the PRD as a comment on the parent issue, post the slice plan as a second comment, and label the parent `minion-research-completed`. (Originally: opened one child issue per slice plus a status comment — replaced; see the Design-revised banner above.)
@@ -65,15 +65,15 @@ The existing simple-task flow is preserved unchanged. The propose pipeline (twic
 11. As jcleira, I want the existing simple-task flow (`minion-approved` label fires `implement.md` directly) to remain untouched, so that I can keep using the fast path for tasks I judge to be small.
 12. As jcleira, I want to be able to triage a `minion-proposal` issue into either `minion-approved` (simple, direct implement) or `minion-research` (complex, full pipeline) based on my judgment, so that I have a fast path and a thorough path on the same proposal queue.
 13. As jcleira, I want to run the research minion locally first (via `minions run .minions/programs/research.md --dry-run` with a workspace cloned side-by-side) before trusting CI, so that I can debug a new program without fighting CI feedback delay.
-14. As jcleira, I want the research workflow to clone `jcleira/argos` at runtime via the PAT, so that the persona always reads the latest TELOS and memory state and so that any future runner (laptop replacement, VM, hosted runner) works without additional setup.
-15. As jcleira, I want the workflow to clone argos's `master` branch (since argos uses `master`, not `main`), so that the clone step doesn't fail silently on a partio-io-conventional `main` assumption.
+14. As jcleira, I want the research workflow to clone the private source repo at runtime via the PAT, so that the persona always reads the latest TELOS and memory state and so that any future runner (laptop replacement, VM, hosted runner) works without additional setup.
+15. As jcleira, I want the workflow to clone the private source repo's `master` branch (since the private source repo uses `master`, not `main`), so that the clone step doesn't fail silently on a partio-io-conventional `main` assumption.
 16. As jcleira, I want the research workflow to enforce `author_association in [OWNER, MEMBER, COLLABORATOR]` before firing, so that random commenters on the public cli repo cannot trigger research runs that consume my OAuth subscription quota.
 17. As jcleira, I want a 90-minute workflow timeout (vs the existing 30 minutes on `minion.yml`), so that long research + PRD + slicing runs do not get killed mid-flight.
 18. As jcleira, I want minion-authored issue comments prefixed with `<!-- minion:research run-id=<sha7> -->` and child issue bodies prefixed with `<!-- minion:slice parent=#N -->`, so that re-runs of `research.md` against the same parent issue can detect existing artifacts and avoid duplicating work.
 19. As jcleira, I want the slicer agent to check for an existing PRD comment (by marker) before writing a new one, so that re-running `research.md` doesn't post a second PRD or open duplicate child issues.
 20. As jcleira, I want the persona substrate to load all of `telos/*.md` and all of `memory/*.md` without filtering, so that the persona has full grounding without me curating which files are "important enough."
 21. As jcleira, I want the research minion to share the same self-hosted runner, OAuth subscription auth, and PAT setup as the existing propose/implement minions, so that I don't introduce a new auth surface or new infrastructure to maintain.
-22. As jcleira, I want `secrets.GH_PAT` on partio-io/cli scoped so it can read `jcleira/argos`, so that the workflow's clone step succeeds.
+22. As jcleira, I want `secrets.GH_PAT` on partio-io/cli scoped so it can read the private source repo, so that the workflow's clone step succeeds.
 23. As jcleira, I want the research workflow to NOT auto-close the parent issue or add `minion-done` (unlike `minion.yml`'s success path), so that the parent stays open until I close it manually.
 24. As jcleira, I want to retain the option to add a "tune-up gotchas" file later (without rebuilding the system), so that I can correct the persona's blind spots when I see them in real runs.
 25. As jcleira, I want the propose loop to keep running unchanged (twice-daily cron generating `minion-proposal` issues), so that competitor-monitoring continues while I rebuild engagement with the system.
@@ -88,9 +88,9 @@ The existing simple-task flow is preserved unchanged. The propose pipeline (twic
 ### Modules built or modified
 
 - **`research.md` program** (new, in `partio-io/cli/.minions/programs/`). Multi-agent program with five sub-agents executed sequentially in a single minion run: researcher, persona, prd-writer, slicer, publisher. Each agent has its own prompt; they share a worktree and pass state via files (transcript, draft PRD, slice list). Frontmatter declares `target_repos: [cli]`, no acceptance criteria (no code is written by the research run itself), and no `pr_labels` (no PR is created).
-- **`research.yml` workflow** (new, in `partio-io/cli/.github/workflows/`). Mirrors `minion.yml`'s structure with these differences: triggers on `issues.labeled` for `minion-research` and on `issue_comment` containing `/minion research`; gates on `author_association` in `[OWNER, MEMBER, COLLABORATOR]`; clones `jcleira/argos` (master) into the workspace before invoking minions; 90-minute timeout; omits the success-path "Mark done" / auto-close steps.
+- **`research.yml` workflow** (new, in `partio-io/cli/.github/workflows/`). Mirrors `minion.yml`'s structure with these differences: triggers on `issues.labeled` for `minion-research` and on `issue_comment` containing `/minion research`; gates on `author_association` in `[OWNER, MEMBER, COLLABORATOR]`; clones the private source repo (master) into the workspace before invoking minions; 90-minute timeout; omits the success-path "Mark done" / auto-close steps.
 - **GitHub labels on `partio-io/cli`** (new): `minion-research` (input trigger), `minion-research-output` (provenance on slicer-created child issues), `minion-research-completed` (parent state after research run succeeds).
-- **`secrets.GH_PAT`** scope expansion to grant read access to `jcleira/argos`. Configuration change, no file change.
+- **`secrets.GH_PAT`** scope expansion to grant read access to the private source repo. Configuration change, no file change.
 - **No changes to `partio-minions`**. The Go binary already supports multi-agent programs, sequential execution, context hints, and gh-CLI side effects from agent prompts. `research.md` is a new consumer of that runtime, not an extension of it.
 - **No changes to `implement.md`, `minion.yml`, `propose.md`, `propose.yml`, `approve.md`, `doc-update.md`, `readme-update.md`, `ingest.md`**. Existing simple-task flow and propose pipeline run untouched.
 
@@ -107,7 +107,7 @@ The persona-agent's prompt contains a literal, hard-coded directive: "Use TELOS 
 
 ### Persona substrate scope
 
-`research.md` declares `## Context` hints for `argos/telos/MISSION.md`, `argos/telos/GOALS.md`, `argos/telos/PROJECTS.md`, `argos/telos/BELIEFS.md`, all of `argos/memory/*.md` (48 files, ~120K chars). No filtering; the persona-agent decides at runtime which substrate is relevant per question. Total token cost ~31K, fully cacheable across runs.
+`research.md` declares `## Context` hints for `private-source/telos/MISSION.md`, `private-source/telos/GOALS.md`, `private-source/telos/PROJECTS.md`, `private-source/telos/BELIEFS.md`, all of `private-source/memory/*.md` (48 files, ~120K chars). No filtering; the persona-agent decides at runtime which substrate is relevant per question. Total token cost ~31K, fully cacheable across runs.
 
 ### Idempotency contract
 
@@ -128,7 +128,7 @@ The publisher agent's prompt instructs it to query the parent issue's existing c
 
 ### Architectural decisions
 
-- **Clone argos fresh per workflow run** (vs symlinking the runner-resident clone, vs snapshotting from runner filesystem). Reproducibility (workflow log shows exact argos SHA used) and portability (no runner-host coupling) outweigh the ~5s clone overhead. Alternative paths were considered and rejected; revisit if the laptop runner is replaced or augmented.
+- **Clone the private source repo fresh per workflow run** (vs symlinking the runner-resident clone, vs snapshotting from runner filesystem). Reproducibility (workflow log shows exact private-source SHA used) and portability (no runner-host coupling) outweigh the ~5s clone overhead. Alternative paths were considered and rejected; revisit if the laptop runner is replaced or augmented.
 - **Each minion phase runs as its own Claude session within a single program run** (sub-agents in `## Agents`), not as separate program files chained through GH. Within-run sub-agents are simpler to coordinate, share a worktree natively, and produce one workflow run per parent issue (cleaner observability) instead of N runs across the chain.
 - **All artifacts on GitHub** (issues, comments, PRs); no `docs/` files committed. Keeps the chain on a single surface; `gh` is already available in the agent's Bash tool; no new sync mechanism between docs/ and the issue tracker.
 - **Three labels not one.** `minion-research`, `minion-research-output`, `minion-research-completed` separate input trigger, child provenance, and parent state. Each is queryable independently.
@@ -145,7 +145,7 @@ No new APIs. All inter-component communication is one of: (a) GitHub label/issue
 ### Specific interactions
 
 - Human applies `minion-research` to parent issue → `research.yml` fires.
-- Workflow clones argos into `${{ github.workspace }}/argos/`.
+- Workflow clones the private source repo into `${{ github.workspace }}/private-source/`.
 - Workflow runs `minions run .minions/programs/research.md --issue <N>`.
 - Sub-agents run sequentially: researcher → persona → prd-writer → slicer → publisher.
 - Publisher posts PRD comment, opens child issues, labels parent.
@@ -180,11 +180,11 @@ No new APIs. All inter-component communication is one of: (a) GitHub label/issue
 ## Out of Scope
 
 - **Persona "tune-up gotchas" file**. Defer until persona misbehavior is observed in real runs; predicting gotchas without data wastes effort.
-- **Pre-flight check that argos clone is on master and clean**. The clone-fresh strategy sidesteps mid-state risk.
+- **Pre-flight check that private-source clone is on master and clean**. The clone-fresh strategy sidesteps mid-state risk.
 - **Automated parent-close when all child PRs are merged**. Manual close is fine for v1.
 - **Escalation logic in `implement.md`** ("this task is too big, escalate to research"). Trust human triage to choose path.
 - **Cost / quota dashboards**. Subscription quota is the real ceiling; existing run logs report token counts. Build observability only if quota becomes a constraint.
-- **Multi-runner / hosted-runner support beyond the existing self-hosted laptop runner**. Workflow clones argos via PAT to keep the future open, but no hosted runner is being provisioned now.
+- **Multi-runner / hosted-runner support beyond the existing self-hosted laptop runner**. Workflow clones the private source repo via PAT to keep the future open, but no hosted runner is being provisioned now.
 - **PRD-comment versioning / history**. First version overwrites or regenerates; no diff tracking.
 - **Persona "learning" from past runs**. Persona is stateless per run. Tuning happens via the gotchas file (out of scope) or via TELOS/memory updates (continuous, separate process).
 - **Changes to existing simple-task flow**. `minion.yml`, `implement.md`, `propose.md`, `propose.yml`, `approve.md`, `doc-update.md`, `ingest.md`, `readme-update.md` all unchanged.
@@ -198,7 +198,7 @@ No new APIs. All inter-component communication is one of: (a) GitHub label/issue
 
 - The self-hosted runner `github-runner-partio-minion-ai-01` is on jcleira's laptop (`/home/arvos/...`). OAuth subscription auth flows through `~/.claude/.credentials.json` on that machine. Any infra change affecting the laptop affects the runner.
 - Subscription quota is the real cost ceiling. API-equivalent valuations in run logs (~$0.83/propose-run) are not billed dollars under OAuth; usage counts against Claude Max rolling/weekly caps. Many one-shots per day may bump those caps.
-- `argos`'s default branch is `master`, not `main`. Workflow clone step must respect that.
+- the private source repo's default branch is `master`, not `main`. Workflow clone step must respect that.
 - This design is the spiritual sibling of the `/code-research` → `/code-create-prd` → `/code-create-issues` → `/code-execute-issue` skill chain, executed headlessly with a persona-agent in jcleira's seat and GitHub artifacts replacing local doc files.
 - partio-minions's reboot history (partio-minions-claude-code → minion-multirepository → minion-programs → minion-programs-only → current) deliberately stripped functionality. This PRD is purely additive at the program/workflow/config layer; it does not reverse the simplification trajectory of the binary.
 - The current propose pipeline produces 1–5 `minion-proposal` issues/day from competitor monitoring of `entireio`. Some of those may be the natural first inputs for the research minion: triage proposal → judge complexity → label `minion-approved` (simple) or `minion-research` (complex).

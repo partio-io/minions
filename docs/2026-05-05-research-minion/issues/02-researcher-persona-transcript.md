@@ -18,10 +18,10 @@ trailing `RESEARCH_COMPLETE` marker on its own line.
 
 The `persona` agent answers each unanswered question in the
 transcript as jcleira would. Its prompt loads the full TELOS and
-memory substrate from the argos clone created in slice
-[#1](./01-workflow-skeleton.md) (`argos/telos/MISSION.md`,
-`argos/telos/GOALS.md`, `argos/telos/PROJECTS.md`,
-`argos/telos/BELIEFS.md`, all of `argos/memory/*.md` — currently 48
+memory substrate from the private-source clone created in slice
+[#1](./01-workflow-skeleton.md) (`private-source/telos/MISSION.md`,
+`private-source/telos/GOALS.md`, `private-source/telos/PROJECTS.md`,
+`private-source/telos/BELIEFS.md`, all of `private-source/memory/*.md` — currently 48
 files, ~120K chars). The agent decides at runtime which substrate is
 relevant per question; no curation or filtering happens at write
 time.
@@ -49,10 +49,10 @@ required on this transitional comment.
 - [ ] `research.md`'s `## Agents` section declares `researcher`,
   `persona`, and `publisher` agents in that sequential order.
 - [ ] `research.md` has a `## Context` section with hints for
-  `argos/telos/MISSION.md`, `argos/telos/GOALS.md`,
-  `argos/telos/PROJECTS.md`, `argos/telos/BELIEFS.md`, and
-  `argos/memory/*.md` (glob, not enumerated). The hints reference the
-  paths under `${{ github.workspace }}/argos/` produced by slice
+  `private-source/telos/MISSION.md`, `private-source/telos/GOALS.md`,
+  `private-source/telos/PROJECTS.md`, `private-source/telos/BELIEFS.md`, and
+  `private-source/memory/*.md` (glob, not enumerated). The hints reference the
+  paths under `${{ github.workspace }}/private-source/` produced by slice
   [#1](./01-workflow-skeleton.md).
 - [ ] The `persona` agent prompt contains a literal directive that
   reads, semantically: "Use TELOS and memory to *decide* — what
@@ -90,7 +90,7 @@ runtime.
 
 - `~/.claude/skills/code-research/` (and the
   `/home/arvos/.claude/skills/code-create-prd/` skill) — the
-  spiritual model for the researcher's interview style. The `argos`
+  spiritual model for the researcher's interview style. The private-source repo
   repo's `skills/code-research/SKILL.md` is the closest direct
   reference for question-tree shape.
 - `partio-cli/.minions/programs/propose.md` — example of a program

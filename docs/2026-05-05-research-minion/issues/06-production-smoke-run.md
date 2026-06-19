@@ -48,7 +48,7 @@ runs trust the cascade.").
   smoke. Recorded in the PR/notes attached to closing this slice.
 - [ ] `minion-research` label applied to the chosen parent. Workflow
   log shows the run firing within seconds, passing the
-  `author_association` gate, and cloning argos master successfully.
+  `author_association` gate, and cloning the private source repo (master branch) successfully.
 - [ ] Run completes inside the 90-minute timeout. Total wall-clock
   time recorded in the smoke notes.
 - [ ] PRD comment present on the parent, substantive, and matches
@@ -76,7 +76,7 @@ runs trust the cascade.").
   trees, or PRD-shape issues observed. These notes seed the future
   "tune-up gotchas" file (still out of scope here per PRD) and
   inform whether TELOS or memory updates are warranted (handled via
-  the normal argos PR flow, not in this PR).
+  the normal private PR flow, not in this PR).
 
 ## Modules touched
 
