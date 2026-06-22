@@ -18,10 +18,10 @@ trailing `RESEARCH_COMPLETE` marker on its own line.
 
 The `persona` agent answers each unanswered question in the
 transcript as jcleira would. Its prompt loads the full TELOS and
-memory substrate from the private-source clone created in slice
-[#1](./01-workflow-skeleton.md) (`private-source/telos/MISSION.md`,
-`private-source/telos/GOALS.md`, `private-source/telos/PROJECTS.md`,
-`private-source/telos/BELIEFS.md`, all of `private-source/memory/*.md` — currently 48
+memory substrate from the external clone created in slice
+[#1](./01-workflow-skeleton.md) (`external/telos/MISSION.md`,
+`external/telos/GOALS.md`, `external/telos/PROJECTS.md`,
+`external/telos/BELIEFS.md`, all of `external/memory/*.md` — currently 48
 files, ~120K chars). The agent decides at runtime which substrate is
 relevant per question; no curation or filtering happens at write
 time.
@@ -29,8 +29,8 @@ time.
 The persona prompt contains a literal, hard-coded privacy directive
 (see *Persona privacy directive* in the PRD). The directive is
 load-bearing — every persona output must be in its own words, framed
-as a decision, and must never quote or paraphrase health, training,
-diary, financial, location, or calendar content from the substrate.
+as a decision, and must never quote or paraphrase personal data from
+the substrate.
 
 The two agents share `./research-transcript.md` and alternate: each
 turn, the running agent reads the latest transcript state and
@@ -49,16 +49,15 @@ required on this transitional comment.
 - [ ] `research.md`'s `## Agents` section declares `researcher`,
   `persona`, and `publisher` agents in that sequential order.
 - [ ] `research.md` has a `## Context` section with hints for
-  `private-source/telos/MISSION.md`, `private-source/telos/GOALS.md`,
-  `private-source/telos/PROJECTS.md`, `private-source/telos/BELIEFS.md`, and
-  `private-source/memory/*.md` (glob, not enumerated). The hints reference the
-  paths under `${{ github.workspace }}/private-source/` produced by slice
+  `external/telos/MISSION.md`, `external/telos/GOALS.md`,
+  `external/telos/PROJECTS.md`, `external/telos/BELIEFS.md`, and
+  `external/memory/*.md` (glob, not enumerated). The hints reference the
+  paths under `${{ github.workspace }}/external/` produced by slice
   [#1](./01-workflow-skeleton.md).
 - [ ] The `persona` agent prompt contains a literal directive that
   reads, semantically: "Use TELOS and memory to *decide* — what
   answer would jcleira give? Never quote, paraphrase, or reference
-  personal data (health, training, daily diary content, finances,
-  location, calendar) in any output. Output answers in your own
+  personal data in any output. Output answers in your own
   words, framed as decisions on the question at hand." Wording may be
   tuned over time, but the directive must be present and load-bearing
   in the prompt.
@@ -73,9 +72,7 @@ required on this transitional comment.
   [#1](./01-workflow-skeleton.md), a labeled re-run produces a
   comment containing realistic Q&A grounded in the parent issue's
   topic.
-- [ ] Manual review of the comment confirms no personal data leak: no
-  Whoop/Garmin numbers, no diary excerpts, no calendar event names,
-  no financial figures, no specific location strings. The persona's
+- [ ] Manual review of the comment confirms no personal data leak. The persona's
   answers read as *decisions*, not as recitations of substrate.
 
 ## Modules touched
@@ -90,7 +87,7 @@ runtime.
 
 - `~/.claude/skills/code-research/` (and the
   `/home/arvos/.claude/skills/code-create-prd/` skill) — the
-  spiritual model for the researcher's interview style. The private-source repo
+  spiritual model for the researcher's interview style. The external repo
   repo's `skills/code-research/SKILL.md` is the closest direct
   reference for question-tree shape.
 - `partio-cli/.minions/programs/propose.md` — example of a program

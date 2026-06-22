@@ -48,7 +48,7 @@ runs trust the cascade.").
   smoke. Recorded in the PR/notes attached to closing this slice.
 - [ ] `minion-research` label applied to the chosen parent. Workflow
   log shows the run firing within seconds, passing the
-  `author_association` gate, and cloning the private source repo (master branch) successfully.
+  `author_association` gate, and cloning the external repo (master branch) successfully.
 - [ ] Run completes inside the 90-minute timeout. Total wall-clock
   time recorded in the smoke notes.
 - [ ] PRD comment present on the parent, substantive, and matches
@@ -64,9 +64,8 @@ runs trust the cascade.").
 - [ ] Parent labeled `minion-research-completed`. Parent issue state
   is `open`. No `minion-done` label on the parent.
 - [ ] Privacy review of every public artifact (PRD comment, every
-  child body, status comment): no Whoop/Garmin numbers, no diary
-  excerpts, no calendar event names, no financial figures, no
-  specific location strings, no quotes or paraphrases of TELOS or
+  child body, status comment): no personal data, no quotes or
+  paraphrases of TELOS or
   memory content.
 - [ ] `minion-approved` removed from each child issue manually
   before `minion.yml` fires on it (this is the deliberate
@@ -76,7 +75,7 @@ runs trust the cascade.").
   trees, or PRD-shape issues observed. These notes seed the future
   "tune-up gotchas" file (still out of scope here per PRD) and
   inform whether TELOS or memory updates are warranted (handled via
-  the normal private PR flow, not in this PR).
+  the normal PR flow, not in this PR).
 
 ## Modules touched
 
