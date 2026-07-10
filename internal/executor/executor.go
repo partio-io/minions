@@ -27,6 +27,8 @@ type Opts struct {
 	PlanText      string
 	IssueContext  string // fetched issue body, injected into prompt
 	IssueRef      string // issue number (e.g. "437"); appended to taskID so each build gets its own branch/PR
+	PRContext     string // fetched PR title, body, and diff, injected into prompt
+	PRRef         string // PR number (e.g. "488"); appended to taskID so each build gets its own branch/PR
 	WorkspaceRoot string
 	Project       *project.Project
 	Tracker       *pcontext.Tracker
@@ -104,14 +106,20 @@ func buildTaskID(progID, agentName, issueRef string) string {
 // runAgent executes a single sub-agent.
 func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *program.AgentDef) AgentResult {
 	repos := prog.EffectiveTargetRepos(agent)
-	taskID := buildTaskID(prog.ID, agent.Name, opts.IssueRef)
+	// Issue and PR refs are mutually exclusive at the CLI; use whichever is set
+	// so each triggered build gets its own branch/PR.
+	ref := opts.IssueRef
+	if ref == "" {
+		ref = opts.PRRef
+	}
+	taskID := buildTaskID(prog.ID, agent.Name, ref)
 	multiRepo := len(repos) > 1
 
 	// Start context tracking
 	pt := opts.Tracker.StartPhase("agent:" + agent.Name)
 
 	// Build prompt
-	promptText := buildAgentPrompt(prog, agent, opts.PlanText, opts.IssueContext, opts.WorkspaceRoot, opts.Project, pt)
+	promptText := buildAgentPrompt(prog, agent, opts.PlanText, opts.IssueContext, opts.PRContext, opts.WorkspaceRoot, opts.Project, pt)
 
 	if opts.DryRun {
 		fmt.Printf("\n=== DRY RUN: Agent %s Prompt ===\n", agent.Name)

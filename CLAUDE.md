@@ -17,6 +17,7 @@ Minions is a standalone program runtime for orchestrating unattended Claude Code
 minions run <program.md>                    # Execute a program
 minions run <program.md> --issue 120        # Execute with GitHub issue as context
 minions run <program.md> --issue org/repo#120  # Full issue reference
+minions run <program.md> --pr org/repo#488  # Execute with a PR (title, body, diff) as context
 minions run <program.md> --dry-run          # Preview without executing
 minions init --org <org> --repos <r1,r2>    # Bootstrap a new project
 minions version                             # Print version
