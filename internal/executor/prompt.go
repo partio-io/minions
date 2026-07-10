@@ -13,7 +13,7 @@ import (
 )
 
 // buildAgentPrompt constructs the prompt for a sub-agent execution.
-func buildAgentPrompt(prog *program.Program, agent *program.AgentDef, planText, issueContext, workspaceRoot string, proj *project.Project, pt *context.PhaseTracker) string {
+func buildAgentPrompt(prog *program.Program, agent *program.AgentDef, planText, issueContext, prContext, workspaceRoot string, proj *project.Project, pt *context.PhaseTracker) string {
 	var b strings.Builder
 	repos := prog.EffectiveTargetRepos(agent)
 
@@ -27,6 +27,13 @@ func buildAgentPrompt(prog *program.Program, agent *program.AgentDef, planText, 
 		issueSection := "## Issue\n\n" + issueContext + "\n\n"
 		b.WriteString(issueSection)
 		pt.AddContext("issue", issueContext)
+	}
+
+	// Pull request context (from --pr flag)
+	if prContext != "" {
+		prSection := "## Pull Request\n\n" + prContext + "\n\n"
+		b.WriteString(prSection)
+		pt.AddContext("pull_request", prContext)
 	}
 
 	// Plan context
