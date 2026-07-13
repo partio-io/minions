@@ -43,8 +43,22 @@ func Create(repoPath, taskID string) (string, error) {
 		_, _ = git.ExecGitDir(repoPath, "branch", "-D", branchName)
 	}
 
-	// Create the worktree with a new branch from HEAD
-	if _, err := git.ExecGitDir(repoPath, "worktree", "add", wtPath, "-b", branchName, "HEAD"); err != nil {
+	// Base the worktree branch on the latest upstream default branch rather than
+	// the local HEAD. The persistent CI checkouts are long-lived and their local
+	// default branch drifts behind origin; branching from local HEAD would make
+	// every minion branch (and its PR) start from stale history and conflict with
+	// whatever merged upstream since. Fetching and branching from origin/<default>
+	// never moves the checkout's local branches or touches its working tree, so it
+	// is safe even when the checkout is shared across worktrees.
+	base := "HEAD"
+	if ref, err := latestOriginBase(repoPath); err != nil {
+		slog.Warn("could not resolve latest origin base; branching from local HEAD", "repo", repoPath, "error", err)
+	} else {
+		base = ref
+	}
+
+	// Create the worktree with a new branch from the resolved base.
+	if _, err := git.ExecGitDir(repoPath, "worktree", "add", wtPath, "-b", branchName, base); err != nil {
 		return "", fmt.Errorf("creating worktree: %w", err)
 	}
 
@@ -60,6 +74,57 @@ func Create(repoPath, taskID string) (string, error) {
 	}
 
 	return wtPath, nil
+}
+
+// latestOriginBase fetches origin's default branch and returns the ref the new
+// worktree should branch from (e.g. "origin/main"), so minion branches are based
+// on the latest upstream default branch instead of a stale local checkout. It
+// returns an error when the repo has no usable origin default branch, letting the
+// caller fall back to local HEAD.
+func latestOriginBase(repoPath string) (string, error) {
+	if _, err := git.ExecGitDir(repoPath, "remote", "get-url", "origin"); err != nil {
+		return "", fmt.Errorf("no origin remote: %w", err)
+	}
+
+	branch := originDefaultBranch(repoPath)
+	if branch == "" {
+		return "", fmt.Errorf("could not determine origin default branch")
+	}
+
+	if _, err := git.ExecGitDir(repoPath, "fetch", "--quiet", "origin", branch); err != nil {
+		return "", fmt.Errorf("fetching origin/%s: %w", branch, err)
+	}
+
+	ref := "origin/" + branch
+	if _, err := git.ExecGitDir(repoPath, "rev-parse", "--verify", "--quiet", ref+"^{commit}"); err != nil {
+		return "", fmt.Errorf("resolving %s: %w", ref, err)
+	}
+	return ref, nil
+}
+
+// originDefaultBranch returns the short name of origin's default branch (e.g.
+// "main"), or "" if it cannot be determined. It prefers the locally recorded
+// origin/HEAD symref and falls back to rediscovering it from the remote.
+func originDefaultBranch(repoPath string) string {
+	read := func() string {
+		out, err := git.ExecGitDir(repoPath, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+		if err != nil {
+			return ""
+		}
+		return strings.TrimPrefix(strings.TrimSpace(out), "origin/")
+	}
+
+	if b := read(); b != "" {
+		return b
+	}
+	// origin/HEAD is not recorded locally (common on shallow CI clones); ask the
+	// remote to (re)discover it, then re-read.
+	if _, err := git.ExecGitDir(repoPath, "remote", "set-head", "origin", "--auto"); err == nil {
+		if b := read(); b != "" {
+			return b
+		}
+	}
+	return ""
 }
 
 // Cleanup removes a worktree created by Create.
