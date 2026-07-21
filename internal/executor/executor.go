@@ -487,8 +487,18 @@ func runChecks(worktreePaths []string) (bool, string) {
 		output, err := checks.Run(wtPath)
 		if err != nil {
 			allPass = false
-			failed.WriteString(output)
-			failed.WriteByte('\n')
+			// The failure reason frequently lives only in err: an exec-level
+			// failure (e.g. `make` not resolvable in the runner's PATH) makes
+			// CombinedOutput return empty output with the real cause in err.
+			// Log it and fold it into the report so the run log shows why and
+			// the retry agent has something concrete to fix instead of an
+			// empty prompt.
+			slog.Error("check failed", "repo", filepath.Base(wtPath), "error", err)
+			if s := strings.TrimSpace(output); s != "" {
+				failed.WriteString(s)
+				failed.WriteByte('\n')
+			}
+			fmt.Fprintf(&failed, "%v\n", err)
 		}
 	}
 	return allPass, failed.String()
