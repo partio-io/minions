@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -98,22 +100,184 @@ func parseRef(ref, flagName string) (repo, number string, err error) {
 	return proj.PrincipalFullName(), ref, nil
 }
 
-// fetchIssue fetches an issue's title and body via gh CLI and returns the
-// parsed issue number alongside the body. Accepts either a bare number (uses
-// principal repo) or a full reference (org/repo#123). The number is returned
-// so the caller can make the per-build taskID/branch unique.
+// maxCommentChars caps how much issue discussion is injected into the prompt.
+// Threads grow without bound; prompts do not.
+const maxCommentChars = 40000
+
+// commentFramingCost approximates the per-comment heading and separators so the
+// cap bounds the rendered text, not just the raw bodies.
+const commentFramingCost = 64
+
+// issueComment is one comment from `gh issue view --json comments`.
+type issueComment struct {
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	Body        string `json:"body"`
+	CreatedAt   string `json:"createdAt"`
+	IsMinimized bool   `json:"isMinimized"`
+}
+
+// issueView is the subset of `gh issue view --json title,body,comments` we use.
+type issueView struct {
+	Title    string         `json:"title"`
+	Body     string         `json:"body"`
+	Comments []issueComment `json:"comments"`
+}
+
+// fetchIssue fetches an issue's title, body and discussion via gh CLI and
+// returns the parsed issue number alongside the rendered context. Accepts
+// either a bare number (uses principal repo) or a full reference
+// (org/repo#123). The number is returned so the caller can make the per-build
+// taskID/branch unique.
 func fetchIssue(ref string) (string, string, error) {
 	repo, number, err := parseRef(ref, "issue")
 	if err != nil {
 		return "", "", err
 	}
 
-	cmd := exec.Command("gh", "issue", "view", number, "--repo", repo, "--json", "title,body", "--jq", `"# " + .title + "\n\n" + .body`)
-	out, err := cmd.Output()
+	out, err := exec.Command("gh", "issue", "view", number, "--repo", repo, "--json", "title,body,comments").Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			return "", "", fmt.Errorf("gh issue view %s --repo %s: %w: %s",
+				number, repo, err, strings.TrimSpace(string(exitErr.Stderr)))
+		}
 		return "", "", fmt.Errorf("gh issue view %s --repo %s: %w", number, repo, err)
 	}
-	return strings.TrimSpace(string(out)), number, nil
+
+	var iv issueView
+	if err := json.Unmarshal(out, &iv); err != nil {
+		return "", "", fmt.Errorf("parsing gh issue view %s --repo %s: %w", number, repo, err)
+	}
+
+	return renderIssueContext(iv, maxCommentChars), number, nil
+}
+
+// automatedCommentPrefixes open the comments minions posts about its own runs.
+// They describe the machinery, not the work, so they only crowd out real
+// discussion. Matching on the body is deliberate: the workflows comment with a
+// human's token, so the author is indistinguishable from a person.
+var automatedCommentPrefixes = []string{
+	"Minion execution failed",
+	"Minion completed",
+}
+
+// isNoiseComment reports whether a comment is machinery rather than discussion:
+// a bare slash-command trigger, a minion status update, or a collapsed comment.
+func isNoiseComment(c issueComment) bool {
+	body := strings.TrimSpace(c.Body)
+	if body == "" || c.IsMinimized {
+		return true
+	}
+	// A trigger and nothing else — "/minion build".
+	if strings.HasPrefix(body, "/minion") && !strings.Contains(body, "\n") {
+		return true
+	}
+	for _, prefix := range automatedCommentPrefixes {
+		if strings.HasPrefix(body, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// selectComments marks the comments that fit within budget, working inward from
+// both ends: the oldest carry the research and design intent, the newest carry
+// course corrections, so the middle is what gets dropped. A comment too large
+// to fit is skipped without blocking the smaller ones behind it.
+func selectComments(comments []issueComment, budget int) (keep []bool, dropped int) {
+	keep = make([]bool, len(comments))
+	lo, hi := 0, len(comments)-1
+	used := 0
+
+	for head := true; lo <= hi; head = !head {
+		i := hi
+		if head {
+			i = lo
+		}
+		if cost := len(comments[i].Body) + commentFramingCost; used+cost <= budget {
+			used += cost
+			keep[i] = true
+		} else {
+			dropped++
+		}
+		if head {
+			lo++
+		} else {
+			hi--
+		}
+	}
+	return keep, dropped
+}
+
+// renderIssueContext turns a fetched issue into the markdown handed to the
+// agent. The discussion is included because that is where research, design
+// decisions and scope boundaries live — an agent given only the body builds
+// blind. Anything withheld is stated outright, since silent truncation reads
+// as "you have everything".
+func renderIssueContext(iv issueView, budget int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n%s", iv.Title, strings.TrimSpace(iv.Body))
+
+	var signal []issueComment
+	for _, c := range iv.Comments {
+		if !isNoiseComment(c) {
+			signal = append(signal, c)
+		}
+	}
+	if len(signal) == 0 {
+		return strings.TrimSpace(b.String())
+	}
+
+	keep, dropped := selectComments(signal, budget)
+	b.WriteString("\n\n---\n\n## Discussion\n\n")
+	b.WriteString(discussionNote(len(iv.Comments), len(signal)-dropped, len(iv.Comments)-len(signal), dropped))
+
+	gapNoted := false
+	for i, c := range signal {
+		if !keep[i] {
+			if !gapNoted {
+				fmt.Fprintf(&b, "\n\n_[%s omitted to fit the context budget]_", count(dropped, "comment"))
+				gapNoted = true
+			}
+			continue
+		}
+		fmt.Fprintf(&b, "\n\n### @%s", c.Author.Login)
+		if date, _, ok := strings.Cut(c.CreatedAt, "T"); ok {
+			fmt.Fprintf(&b, " — %s", date)
+		}
+		fmt.Fprintf(&b, "\n\n%s", strings.TrimSpace(c.Body))
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+// discussionNote states plainly what the agent is, and is not, being shown.
+func discussionNote(total, kept, filtered, dropped int) string {
+	note := fmt.Sprintf("This issue has %s.", count(total, "comment"))
+	if filtered > 0 {
+		note += fmt.Sprintf(" %s of automated minion status were filtered out.", count(filtered, "comment"))
+	}
+	if dropped > 0 {
+		note += fmt.Sprintf(" %s exceeded the context budget and %s omitted — assume the discussion below is incomplete.",
+			count(dropped, "comment"), plural(dropped, "was", "were"))
+	}
+	if kept == 0 {
+		return note
+	}
+	return note + fmt.Sprintf(" The remaining %s follow, oldest first.", count(kept, "comment"))
+}
+
+func count(n int, noun string) string {
+	return fmt.Sprintf("%d %s", n, plural(n, noun, noun+"s"))
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // fetchPR fetches a pull request's title, body, and full diff via gh CLI and
