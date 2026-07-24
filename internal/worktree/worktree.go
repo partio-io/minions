@@ -62,17 +62,91 @@ func Create(repoPath, taskID string) (string, error) {
 		return "", fmt.Errorf("creating worktree: %w", err)
 	}
 
-	// Configure git user in worktree so commits work in CI
+	if err := configureWorktree(wtPath); err != nil {
+		return "", err
+	}
+	return wtPath, nil
+}
+
+// configureWorktree sets the git user in a fresh worktree so commits work in
+// CI, and disables commit signing.
+func configureWorktree(wtPath string) error {
 	if _, err := git.ExecGitDir(wtPath, "config", "user.name", "minion[bot]"); err != nil {
-		return "", fmt.Errorf("configuring git user.name: %w", err)
+		return fmt.Errorf("configuring git user.name: %w", err)
 	}
 	if _, err := git.ExecGitDir(wtPath, "config", "user.email", "minion[bot]@users.noreply.github.com"); err != nil {
-		return "", fmt.Errorf("configuring git user.email: %w", err)
+		return fmt.Errorf("configuring git user.email: %w", err)
 	}
 	if _, err := git.ExecGitDir(wtPath, "config", "commit.gpgsign", "false"); err != nil {
-		return "", fmt.Errorf("configuring commit.gpgsign: %w", err)
+		return fmt.Errorf("configuring commit.gpgsign: %w", err)
+	}
+	return nil
+}
+
+// CreateAtBranch creates a worktree for a repo + task combination checked out
+// at the existing minion/<taskID> branch tip. Unlike Create it neither
+// re-bases the branch on origin's default nor deletes it — the slice loop
+// uses it so slice N+1 re-attaches to the branch carrying slice N's commits.
+func CreateAtBranch(repoPath, taskID string) (string, error) {
+	branchName := "minion/" + taskID
+	wtPath := filepath.Join(repoPath, worktreeDir, taskID)
+
+	if _, err := git.ExecGitDir(repoPath, "rev-parse", "--git-dir"); err != nil {
+		return "", fmt.Errorf("%s is not a git repository: %w", repoPath, err)
 	}
 
+	if _, err := git.ExecGitDir(repoPath, "show-ref", "--verify", "refs/heads/"+branchName); err != nil {
+		return "", fmt.Errorf("branch %s does not exist: %w", branchName, err)
+	}
+
+	// Remove stale worktree if it exists — the branch must not be checked out
+	// anywhere else for the new worktree to attach to it.
+	if _, err := os.Stat(wtPath); err == nil {
+		slog.Debug("cleaning up stale worktree", "path", wtPath)
+		_ = removeWorktree(repoPath, wtPath)
+	}
+
+	if _, err := git.ExecGitDir(repoPath, "worktree", "add", wtPath, branchName); err != nil {
+		return "", fmt.Errorf("creating worktree at %s: %w", branchName, err)
+	}
+
+	if err := configureWorktree(wtPath); err != nil {
+		return "", err
+	}
+	return wtPath, nil
+}
+
+// CreateFromOrigin creates a worktree for a repo + task combination checked
+// out from origin's minion/<taskID> branch, fetching it first. The local
+// branch is created or reset to the fetched tip (-B), so whatever a stale
+// local clone recorded for it is never trusted. Resume uses it to continue a
+// previously pushed build.
+func CreateFromOrigin(repoPath, taskID string) (string, error) {
+	branchName := "minion/" + taskID
+	wtPath := filepath.Join(repoPath, worktreeDir, taskID)
+
+	if _, err := git.ExecGitDir(repoPath, "rev-parse", "--git-dir"); err != nil {
+		return "", fmt.Errorf("%s is not a git repository: %w", repoPath, err)
+	}
+
+	if err := git.FetchBranch(repoPath, branchName); err != nil {
+		return "", fmt.Errorf("fetching origin/%s: %w", branchName, err)
+	}
+
+	// Remove stale worktree if it exists — the branch must not be checked out
+	// anywhere else for -B to reset it.
+	if _, err := os.Stat(wtPath); err == nil {
+		slog.Debug("cleaning up stale worktree", "path", wtPath)
+		_ = removeWorktree(repoPath, wtPath)
+	}
+
+	if _, err := git.ExecGitDir(repoPath, "worktree", "add", "-B", branchName, wtPath, "origin/"+branchName); err != nil {
+		return "", fmt.Errorf("creating worktree from origin/%s: %w", branchName, err)
+	}
+
+	if err := configureWorktree(wtPath); err != nil {
+		return "", err
+	}
 	return wtPath, nil
 }
 
