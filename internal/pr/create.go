@@ -16,6 +16,17 @@ type CreateOpts struct {
 	AcceptanceCriteria []string // listed in PR body
 }
 
+// aheadOfOriginDefault reports whether HEAD carries commits beyond origin's
+// default branch. A branch that was already fully pushed (the slice loop
+// pushes after every slice) has no unpushed commits, yet still needs its PR —
+// "no changes" must mean nothing beyond the default branch, not nothing
+// unpushed. When origin/HEAD is not resolvable this reports false, keeping
+// the historical unpushed-only behavior.
+func aheadOfOriginDefault(worktreePath string) bool {
+	out, err := git.ExecGitDir(worktreePath, "log", "HEAD", "--not", "origin/HEAD", "--oneline")
+	return err == nil && strings.TrimSpace(out) != ""
+}
+
 // Create stages, commits, pushes, and creates a PR for a minion's work.
 // Handles both uncommitted changes (stages + commits) and pre-committed changes (just pushes).
 // principalRepo is the full name of the principal repo (used in commit messages/PR bodies).
@@ -31,7 +42,7 @@ func Create(worktreePath, repoFullName, taskID, title, description, why string, 
 	logOut, _ := git.ExecGitDir(worktreePath, "log", "HEAD", "--not", "--remotes", "--oneline")
 	hasNewCommits := strings.TrimSpace(logOut) != ""
 
-	if !hasUncommitted && !hasNewCommits {
+	if !hasUncommitted && !hasNewCommits && !aheadOfOriginDefault(worktreePath) {
 		slog.Info("no changes", "repo", filepath.Base(worktreePath))
 		return "", nil
 	}

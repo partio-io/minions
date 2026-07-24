@@ -106,6 +106,18 @@ func CommentOnPR(repo, number, body string) {
 	}
 }
 
+// CommentOnIssue adds a comment to an issue by repo and number. Unlike
+// CommentOnPR it returns the error: the caller decides whether a failed post
+// matters, and the executor must never let one mask a build failure.
+func CommentOnIssue(repo, number, body string) error {
+	cmd := exec.Command("gh", "issue", "comment", number, "--repo", repo, "--body", body)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("commenting on issue %s#%s: %s: %w", repo, number, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 func comment(prURL, body string) {
 	m := prURLPattern.FindStringSubmatch(prURL)
 	if len(m) < 3 {
