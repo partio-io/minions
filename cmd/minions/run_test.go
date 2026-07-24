@@ -53,6 +53,29 @@ func comment(login, body string) issueComment {
 	return c
 }
 
+func TestToSliceComments_PassesAllCommentsThrough(t *testing.T) {
+	minimized := comment("bot", "hidden but still passed through")
+	minimized.IsMinimized = true
+	comments := []issueComment{
+		comment("jcleira", "<!-- minion:research-slices -->\n\n### Slice 1 — A"),
+		comment("jcleira", "Minion completed. status noise"),
+		minimized,
+	}
+
+	got := toSliceComments(comments)
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3 — structural pass-through must not filter", len(got))
+	}
+	for i, c := range comments {
+		if got[i].Author != c.Author.Login || got[i].Body != c.Body {
+			t.Errorf("comment %d: got %+v, want author %q body %q", i, got[i], c.Author.Login, c.Body)
+		}
+	}
+	if toSliceComments(nil) != nil {
+		t.Errorf("nil input should stay nil")
+	}
+}
+
 func TestIsNoiseComment(t *testing.T) {
 	minimized := comment("jcleira", "outdated design sketch")
 	minimized.IsMinimized = true
