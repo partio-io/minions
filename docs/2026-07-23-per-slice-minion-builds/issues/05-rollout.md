@@ -34,12 +34,12 @@ opts in).
 
 ## Acceptance criteria
 
-- [ ] Release notes for the new minions version summarize the
+- [x] Release notes for the new minions version summarize the
       slice-aware behavior and its backward compatibility.
-- [ ] The cli PR contains: `implement.md` opt-in + per-slice
+- [x] The cli PR contains: `implement.md` opt-in + per-slice
       instructions, `timeout-minutes: 60`, and the version-pin bump —
       nothing else.
-- [ ] Order respected: pin bump PR references the tagged release; no
+- [x] Order respected: pin bump PR references the tagged release; no
       pin points at an untagged ref.
 - [ ] Staged run on a test issue with a hand-written 2-slice plan
       completes: two slice sessions, marker commits on one branch,
@@ -83,3 +83,13 @@ block to the user verbatim:
   - No following slice — this note closes the feature.
 
 The feature is not "done" until the staged run's outcome is recorded.
+
+Prepared artefacts (2026-07-24): the runtime slices were never
+committed, so rollout also opened the feature PR itself.
+
+- Feature PR (slices 01–04 + docs): partio-io/minions#141
+- Release-notes draft: v0.0.11 (publish creates the tag; after #141)
+- cli rollout PR: partio-io/cli#563 (opt-in, timeout 60, pin v0.0.11)
+- Staged-run issues (inert until labeled `minion-approved`):
+  partio-io/cli#561 (2-slice plan), partio-io/cli#562 (plan-less
+  control)
