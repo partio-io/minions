@@ -9,6 +9,7 @@ type Program struct {
 	AcceptanceCriteria []string `yaml:"acceptance_criteria"`
 	DependsOn          []string `yaml:"depends_on"`
 	Source             string   `yaml:"source"`
+	Slices             bool     `yaml:"slices"` // opt-in to slice-aware execution
 
 	// From markdown body
 	Title       string // first H1

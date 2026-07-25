@@ -228,6 +228,35 @@ The description becomes the implicit agent instructions.
 	}
 }
 
+func TestParseSlicesFlag(t *testing.T) {
+	content := `---
+id: implement
+target_repos:
+  - api
+slices: true
+---
+
+# Implement issue
+
+Build what the issue asks for.
+`
+	p, err := Parse(content)
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	if !p.Slices {
+		t.Error("Slices = false, want true when frontmatter sets slices: true")
+	}
+
+	p2, err := Parse(fullProgram)
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	if p2.Slices {
+		t.Error("Slices = true, want false when frontmatter omits the flag")
+	}
+}
+
 func TestParseNoFrontmatter(t *testing.T) {
 	content := `# Just a title
 

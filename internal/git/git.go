@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -21,4 +22,53 @@ func ExecGit(args ...string) (string, error) {
 func ExecGitDir(dir string, args ...string) (string, error) {
 	fullArgs := append([]string{"-C", dir}, args...)
 	return ExecGit(fullArgs...)
+}
+
+// CommitEmpty records an empty commit with the given message in dir. The
+// slice loop uses it for marker commits that identify a completed slice
+// without touching any files.
+func CommitEmpty(dir, message string) error {
+	_, err := ExecGitDir(dir, "commit", "--allow-empty", "-m", message)
+	return err
+}
+
+// Push pushes branch to origin. --force-with-lease mirrors PR creation's
+// push, so a re-run that rebuilt the branch can overwrite its own remote
+// leftovers without being able to clobber anyone else's work.
+func Push(dir, branch string) error {
+	_, err := ExecGitDir(dir, "push", "--force-with-lease", "-u", "origin", branch)
+	return err
+}
+
+// RemoteBranchExists reports whether branch exists on origin, asking the
+// remote directly so a stale local clone can never answer for it.
+func RemoteBranchExists(dir, branch string) (bool, error) {
+	_, err := ExecGitDir(dir, "ls-remote", "--exit-code", "--heads", "origin", branch)
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
+		return false, nil
+	}
+	return false, err
+}
+
+// FetchBranch updates origin/<branch> in dir from the remote.
+func FetchBranch(dir, branch string) error {
+	_, err := ExecGitDir(dir, "fetch", "-q", "origin", branch)
+	return err
+}
+
+// ListCommitSubjects returns the commit subjects reachable from ref in dir,
+// newest first.
+func ListCommitSubjects(dir, ref string) ([]string, error) {
+	out, err := ExecGitDir(dir, "log", "--format=%s", ref)
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
 }

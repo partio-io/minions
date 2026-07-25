@@ -17,6 +17,7 @@ import (
 	"github.com/partio-io/minions/internal/executor"
 	"github.com/partio-io/minions/internal/planner"
 	"github.com/partio-io/minions/internal/program"
+	"github.com/partio-io/minions/internal/slices"
 	"github.com/partio-io/minions/internal/workspace"
 )
 
@@ -55,12 +56,14 @@ Examples:
 
 			// Fetch issue context if --issue is provided
 			var issueContext, issueNumber string
+			var issue issueView
 			if issueRef != "" {
 				var err error
-				issueContext, issueNumber, err = fetchIssue(issueRef)
+				issue, issueNumber, err = fetchIssue(issueRef)
 				if err != nil {
 					return fmt.Errorf("fetching issue: %w", err)
 				}
+				issueContext = renderIssueContext(issue, maxCommentChars)
 			}
 
 			// Fetch PR context if --pr is provided (mutually exclusive with --issue)
@@ -73,7 +76,7 @@ Examples:
 				}
 			}
 
-			return runProgram(ctx, args[0], workspaceRoot, issueContext, issueNumber, prContext, prNumber, dryRun)
+			return runProgram(ctx, args[0], workspaceRoot, issueContext, issueNumber, prContext, prNumber, issue, dryRun)
 		},
 	}
 
@@ -126,32 +129,48 @@ type issueView struct {
 }
 
 // fetchIssue fetches an issue's title, body and discussion via gh CLI and
-// returns the parsed issue number alongside the rendered context. Accepts
-// either a bare number (uses principal repo) or a full reference
-// (org/repo#123). The number is returned so the caller can make the per-build
-// taskID/branch unique.
-func fetchIssue(ref string) (string, string, error) {
+// returns the parsed view alongside the issue number. Accepts either a bare
+// number (uses principal repo) or a full reference (org/repo#123). The view
+// is returned structurally so the executor can detect slice-plan comments on
+// raw bodies; callers render the prompt blob with renderIssueContext. The
+// number is returned so the caller can make the per-build taskID/branch
+// unique.
+func fetchIssue(ref string) (issueView, string, error) {
 	repo, number, err := parseRef(ref, "issue")
 	if err != nil {
-		return "", "", err
+		return issueView{}, "", err
 	}
 
 	out, err := exec.Command("gh", "issue", "view", number, "--repo", repo, "--json", "title,body,comments").Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			return "", "", fmt.Errorf("gh issue view %s --repo %s: %w: %s",
+			return issueView{}, "", fmt.Errorf("gh issue view %s --repo %s: %w: %s",
 				number, repo, err, strings.TrimSpace(string(exitErr.Stderr)))
 		}
-		return "", "", fmt.Errorf("gh issue view %s --repo %s: %w", number, repo, err)
+		return issueView{}, "", fmt.Errorf("gh issue view %s --repo %s: %w", number, repo, err)
 	}
 
 	var iv issueView
 	if err := json.Unmarshal(out, &iv); err != nil {
-		return "", "", fmt.Errorf("parsing gh issue view %s --repo %s: %w", number, repo, err)
+		return issueView{}, "", fmt.Errorf("parsing gh issue view %s --repo %s: %w", number, repo, err)
 	}
 
-	return renderIssueContext(iv, maxCommentChars), number, nil
+	return iv, number, nil
+}
+
+// toSliceComments converts gh-fetched comments to the structured form the
+// executor consumes for slice-plan detection. Every comment passes through
+// unfiltered — noise filtering stays a prompt-rendering concern.
+func toSliceComments(comments []issueComment) []slices.Comment {
+	if len(comments) == 0 {
+		return nil
+	}
+	out := make([]slices.Comment, len(comments))
+	for i, c := range comments {
+		out[i] = slices.Comment{Author: c.Author.Login, Body: c.Body}
+	}
+	return out
 }
 
 // automatedCommentPrefixes open the comments minions posts about its own runs.
@@ -321,7 +340,7 @@ func debugDirForTask(taskID string) string {
 	return dir
 }
 
-func runProgram(ctx context.Context, programPath, workspaceRoot, issueContext, issueRef, prContext, prRef string, dryRun bool) error {
+func runProgram(ctx context.Context, programPath, workspaceRoot, issueContext, issueRef, prContext, prRef string, issue issueView, dryRun bool) error {
 	prog, err := program.LoadFile(programPath)
 	if err != nil {
 		return err
@@ -378,17 +397,16 @@ func runProgram(ctx context.Context, programPath, workspaceRoot, issueContext, i
 		}
 	}
 
-	if dryRun {
-		report := tracker.Report()
-		report.PrintSummary()
-		return nil
+	if !dryRun {
+		fmt.Println("\n--- Execution Phase ---")
 	}
-
-	fmt.Println("\n--- Execution Phase ---")
 	result, err := executor.Run(ctx, executor.Opts{
 		Program:       prog,
 		PlanText:      planText,
 		IssueContext:  issueContext,
+		IssueTitle:    issue.Title,
+		IssueBody:     issue.Body,
+		IssueComments: toSliceComments(issue.Comments),
 		IssueRef:      issueRef,
 		PRContext:     prContext,
 		PRRef:         prRef,
@@ -400,6 +418,14 @@ func runProgram(ctx context.Context, programPath, workspaceRoot, issueContext, i
 	})
 	if err != nil {
 		return fmt.Errorf("execution failed: %w", err)
+	}
+
+	// Dry run stops here: prompts were printed by the executor, and the
+	// sections below describe work (PRs, agent outcomes) that never ran.
+	if dryRun {
+		report := tracker.Report()
+		report.PrintSummary()
+		return nil
 	}
 
 	fmt.Println("\n==========================================")

@@ -18,17 +18,46 @@ import (
 	"github.com/partio-io/minions/internal/pr"
 	"github.com/partio-io/minions/internal/program"
 	"github.com/partio-io/minions/internal/project"
+	"github.com/partio-io/minions/internal/slices"
 	"github.com/partio-io/minions/internal/worktree"
 )
+
+// Seams over external collaborators so executor tests can stub Claude
+// sessions, checks, and PR creation while real temp git repos exercise the
+// worktree and push mechanics.
+var (
+	claudeRun          = claude.Run
+	checksRun          = checks.Run
+	prCreateAndLinkAll = pr.CreateAndLinkAll
+	prURLForBranch     = ghPRURLForBranch
+	postIssueComment   = pr.CommentOnIssue
+)
+
+// ghPRURLForBranch returns the URL of the open PR whose head is branch, or ""
+// when none exists. It runs gh in repoPath so the repo is resolved from the
+// checkout's origin remote.
+func ghPRURLForBranch(repoPath, branch string) (string, error) {
+	cmd := exec.Command("gh", "pr", "list", "--head", branch, "--json", "url", "--jq", ".[].url")
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("gh pr list --head %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	}
+	url, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	return url, nil
+}
 
 // Opts configures the execution phase.
 type Opts struct {
 	Program       *program.Program
 	PlanText      string
-	IssueContext  string // fetched issue body, injected into prompt
-	IssueRef      string // issue number (e.g. "437"); appended to taskID so each build gets its own branch/PR
-	PRContext     string // fetched PR title, body, and diff, injected into prompt
-	PRRef         string // PR number (e.g. "488"); appended to taskID so each build gets its own branch/PR
+	IssueContext  string           // fetched issue body, injected into prompt
+	IssueTitle    string           // issue title, structured (slice-aware path)
+	IssueBody     string           // issue body, structured (slice-aware path)
+	IssueComments []slices.Comment // fetched issue comments, structured (slice-plan detection)
+	IssueRef      string           // issue number (e.g. "437"); appended to taskID so each build gets its own branch/PR
+	PRContext     string           // fetched PR title, body, and diff, injected into prompt
+	PRRef         string           // PR number (e.g. "488"); appended to taskID so each build gets its own branch/PR
 	WorkspaceRoot string
 	Project       *project.Project
 	Tracker       *pcontext.Tracker
@@ -67,13 +96,18 @@ func Run(ctx gocontext.Context, opts Opts) (*Result, error) {
 		}}
 	}
 
+	plan, err := resolveSlicePlan(prog, opts.IssueComments)
+	if err != nil {
+		return nil, err
+	}
+
 	result := &Result{}
 
 	for i := range agents {
 		agent := &agents[i]
 		slog.Info("running agent", "name", agent.Name, "index", i+1, "total", len(agents))
 
-		agentResult := runAgent(ctx, opts, prog, agent)
+		agentResult := runAgent(ctx, opts, prog, agent, plan)
 		result.AgentResults = append(result.AgentResults, agentResult)
 
 		if agentResult.Error != nil {
@@ -103,8 +137,9 @@ func buildTaskID(progID, agentName, issueRef string) string {
 	return id
 }
 
-// runAgent executes a single sub-agent.
-func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *program.AgentDef) AgentResult {
+// runAgent executes a single sub-agent. A non-nil plan means the slice-aware
+// path is active for this run.
+func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *program.AgentDef, plan *slices.Plan) AgentResult {
 	repos := prog.EffectiveTargetRepos(agent)
 	// Issue and PR refs are mutually exclusive at the CLI; use whichever is set
 	// so each triggered build gets its own branch/PR.
@@ -117,6 +152,20 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 
 	// Start context tracking
 	pt := opts.Tracker.StartPhase("agent:" + agent.Name)
+
+	// Slice-aware dry run: N per-slice prompts replace the single
+	// whole-issue prompt, which is skipped entirely so it does not
+	// pollute context tracking.
+	if opts.DryRun && plan != nil {
+		printSlicePrompts(opts, prog, agent, plan, pt)
+		pt.Finish(nil)
+		return AgentResult{AgentName: agent.Name}
+	}
+
+	// Live slice-aware run: one fresh session per slice on a shared branch.
+	if plan != nil {
+		return runSliceLoop(ctx, opts, prog, agent, plan, taskID, repos, pt)
+	}
 
 	// Build prompt
 	promptText := buildAgentPrompt(prog, agent, opts.PlanText, opts.IssueContext, opts.PRContext, opts.WorkspaceRoot, opts.Project, pt)
@@ -201,7 +250,7 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 		logFile = filepath.Join(opts.DebugDir, "agent-"+agent.Name+"-output.json")
 	}
 
-	result, err := claude.Run(ctx, claude.Opts{
+	result, err := claudeRun(ctx, claude.Opts{
 		Prompt:         promptText,
 		CWD:            claudeCWD,
 		MaxTurns:       maxTurns,
@@ -277,46 +326,76 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 
 	// Run checks
 	if agent.Checks {
-		allPass, failedOutput := runChecks(worktreePaths)
-
-		if !allPass && agent.RetryOnFail {
-			fmt.Printf("--- Checks failed for agent %s, retrying ---\n", agent.Name)
-			retryMaxTurns := agent.RetryMaxTurns
-			if retryMaxTurns == 0 {
-				retryMaxTurns = 15
-			}
-
-			retryPrompt := fmt.Sprintf("The following checks failed after your implementation. Please fix the issues:\n\n%s\n\nFix the errors and ensure all checks pass.", failedOutput)
-
-			var retryLogFile string
-			if opts.DebugDir != "" {
-				retryLogFile = filepath.Join(opts.DebugDir, "agent-"+agent.Name+"-retry-output.json")
-			}
-
-			retryResult, retryErr := claude.Run(ctx, claude.Opts{
-				Prompt:       retryPrompt,
-				CWD:          claudeCWD,
-				MaxTurns:     retryMaxTurns,
-				AllowedTools: strings.Join(tools, ","),
-				LogFile:      retryLogFile,
-			})
-			if retryErr != nil {
-				slog.Error("claude retry failed", "agent", agent.Name, "error", retryErr)
-			} else if retryResult.IsError {
-				slog.Warn("claude retry returned error", "agent", agent.Name, "subtype", retryResult.Subtype)
-			}
-
-			allPass, _ = runChecks(worktreePaths)
-		}
-
-		if !allPass {
+		if !runChecksWithRetry(ctx, opts, agent, worktreePaths, claudeCWD, tools, 0, 0) {
 			slog.Error("checks still failing", "agent", agent.Name)
 			cleanup()
 			return AgentResult{AgentName: agent.Name, Error: fmt.Errorf("checks failed for agent %s", agent.Name)}
 		}
 	}
 
-	// Create PRs
+	prURLs, err := createAgentPRs(ctx, opts, prog, agent, taskID, claudeCWD, worktreeRepos)
+	if err != nil {
+		cleanup()
+		return AgentResult{AgentName: agent.Name, Error: err}
+	}
+
+	cleanup()
+	return AgentResult{AgentName: agent.Name, PRURLs: prURLs}
+}
+
+// runChecksWithRetry runs checks on the worktrees and, when they fail and the
+// agent allows a retry, runs one fix-it session scoped to the failure output
+// before re-running the checks. sliceNum > 0 labels output and debug
+// artifacts with the slice being built.
+func runChecksWithRetry(ctx gocontext.Context, opts Opts, agent *program.AgentDef, worktreePaths []string, claudeCWD string, tools []string, sliceNum, sliceTotal int) bool {
+	allPass, failedOutput := runChecks(worktreePaths)
+	if allPass || !agent.RetryOnFail {
+		return allPass
+	}
+
+	scope := "agent " + agent.Name
+	debugBase := "agent-" + agent.Name
+	logAttrs := []any{"agent", agent.Name}
+	if sliceNum > 0 {
+		scope = fmt.Sprintf("slice %d/%d", sliceNum, sliceTotal)
+		debugBase = fmt.Sprintf("agent-%s-slice-%d", agent.Name, sliceNum)
+		logAttrs = append(logAttrs, "slice", sliceNum)
+	}
+
+	fmt.Printf("--- Checks failed for %s, retrying ---\n", scope)
+	retryMaxTurns := agent.RetryMaxTurns
+	if retryMaxTurns == 0 {
+		retryMaxTurns = 15
+	}
+
+	retryPrompt := fmt.Sprintf("The following checks failed after your implementation. Please fix the issues:\n\n%s\n\nFix the errors and ensure all checks pass.", failedOutput)
+
+	var retryLogFile string
+	if opts.DebugDir != "" {
+		retryLogFile = filepath.Join(opts.DebugDir, debugBase+"-retry-output.json")
+	}
+
+	retryResult, retryErr := claudeRun(ctx, claude.Opts{
+		Prompt:       retryPrompt,
+		CWD:          claudeCWD,
+		MaxTurns:     retryMaxTurns,
+		AllowedTools: strings.Join(tools, ","),
+		LogFile:      retryLogFile,
+	})
+	if retryErr != nil {
+		slog.Error("claude retry failed", append(logAttrs, "error", retryErr)...)
+	} else if retryResult.IsError {
+		slog.Warn("claude retry returned error", append(logAttrs, "subtype", retryResult.Subtype)...)
+	}
+
+	allPass, _ = runChecks(worktreePaths)
+	return allPass
+}
+
+// createAgentPRs runs the shared PR tail: summarize the changes, create and
+// cross-link PRs for every worktree repo, and record the URLs when
+// MINION_PR_URLS_FILE is set.
+func createAgentPRs(ctx gocontext.Context, opts Opts, prog *program.Program, agent *program.AgentDef, taskID, claudeCWD string, worktreeRepos []string) ([]string, error) {
 	fmt.Printf("--- Creating PRs for agent %s ---\n", agent.Name)
 	labelsCSV := strings.Join(prog.PRLabels, ",")
 	if labelsCSV == "" {
@@ -331,8 +410,7 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 	}
 
 	if fullNameFn == nil || principalRepo == "" {
-		cleanup()
-		return AgentResult{AgentName: agent.Name, Error: fmt.Errorf("project config required for PR creation")}
+		return nil, fmt.Errorf("project config required for PR creation")
 	}
 
 	// Summarize changes for PR title and description
@@ -342,10 +420,9 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 		AcceptanceCriteria: prog.AcceptanceCriteria,
 		Source:             prog.Source,
 	}
-	prURLs, err := pr.CreateAndLinkAll(taskID, prTitle, prDescription, "", opts.WorkspaceRoot, labelsCSV, worktreeRepos, fullNameFn, principalRepo, prOpts)
+	prURLs, err := prCreateAndLinkAll(taskID, prTitle, prDescription, "", opts.WorkspaceRoot, labelsCSV, worktreeRepos, fullNameFn, principalRepo, prOpts)
 	if err != nil {
-		cleanup()
-		return AgentResult{AgentName: agent.Name, Error: fmt.Errorf("PR creation failed: %w", err)}
+		return nil, fmt.Errorf("PR creation failed: %w", err)
 	}
 
 	// Write PR URLs to file if env var set
@@ -358,8 +435,7 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 		}
 	}
 
-	cleanup()
-	return AgentResult{AgentName: agent.Name, PRURLs: prURLs}
+	return prURLs, nil
 }
 
 // buildCWD determines the working directory for Claude.
@@ -416,6 +492,13 @@ func summarizeChanges(ctx gocontext.Context, cwd string, prog *program.Program, 
 	diffCmd.Dir = cwd
 	diffOut, err := diffCmd.Output()
 	if err != nil || len(diffOut) == 0 {
+		// Everything may already be committed (the slice loop commits and
+		// pushes each slice); diff the branch against origin's default.
+		diffCmd = exec.Command("git", "diff", "origin/HEAD...HEAD")
+		diffCmd.Dir = cwd
+		diffOut, _ = diffCmd.Output()
+	}
+	if len(diffOut) == 0 {
 		// Fallback: try diff of staged + unstaged
 		diffCmd = exec.Command("git", "diff")
 		diffCmd.Dir = cwd
@@ -444,7 +527,7 @@ func summarizeChanges(ctx gocontext.Context, cwd string, prog *program.Program, 
 	prompt.WriteString("DESCRIPTION:\n<what was implemented, key decisions, how to test>\n")
 
 	fmt.Println("--- Summarizing changes for PR ---")
-	result, err := claude.Run(ctx, claude.Opts{
+	result, err := claudeRun(ctx, claude.Opts{
 		Prompt:   prompt.String(),
 		CWD:      cwd,
 		MaxTurns: 5,
@@ -484,7 +567,7 @@ func runChecks(worktreePaths []string) (bool, string) {
 	allPass := true
 	var failed strings.Builder
 	for _, wtPath := range worktreePaths {
-		output, err := checks.Run(wtPath)
+		output, err := checksRun(wtPath)
 		if err != nil {
 			allPass = false
 			// The failure reason frequently lives only in err: an exec-level
