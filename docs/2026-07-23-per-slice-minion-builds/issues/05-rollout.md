@@ -41,10 +41,10 @@ opts in).
       nothing else.
 - [x] Order respected: pin bump PR references the tagged release; no
       pin points at an untagged ref.
-- [ ] Staged run on a test issue with a hand-written 2-slice plan
+- [x] Staged run on a test issue with a hand-written 2-slice plan
       completes: two slice sessions, marker commits on one branch,
       single PR, issue closed by the existing done flow.
-- [ ] A control run on a plan-less issue still builds single-session,
+- [x] A control run on a plan-less issue still builds single-session,
       confirming zero regression for unsliced issues.
 
 ## Modules touched
@@ -93,3 +93,29 @@ committed, so rollout also opened the feature PR itself.
 - Staged-run issues (inert until labeled `minion-approved`):
   partio-io/cli#561 (2-slice plan), partio-io/cli#562 (plan-less
   control)
+
+Staged-run outcome (2026-07-25): v0.0.11 tagged at the #141 merge
+commit and live via cli#563.
+
+- Staged run (cli#561): first attempt failed in `go install` —
+  sum.golang.org returned 500 on the minutes-old tag (checksum-db
+  ingestion lag; nothing was built). The retry built both slices
+  green — work commit + `minion:slice N/2` marker each, one branch —
+  but slice 1's session opened the PR itself (cli#567), so the
+  runtime's PR step collided and the run went red. A third trigger
+  proved resume in production: fetched markers 2/2, ran zero
+  sessions, adopted cli#567 via ensurePRs, and the done flow closed
+  the issue.
+- Control run (cli#562): the plan-less path stayed single-session
+  with no marker commits. Same agent-opened-PR collision on the
+  first attempt (cli#568, closed) — caused by the test issue's own
+  body promising "one PR", which the agent dutifully implemented.
+  With that phrase removed, the re-run was fully green:
+  runtime-created cli#569, done flow closed the issue.
+- Follow-ups worth their own issues (runtime scope, not rollout):
+  (1) sessions run with `gh` and bypassPermissions will open a PR
+  whenever the issue text mentions one — the runtime's agent prompt
+  should forbid it, since program-body sections beyond the intro are
+  not injected into the session prompt; (2) the single-session PR
+  step could adopt an existing open PR for its branch the way the
+  slice path's ensurePRs already does.
