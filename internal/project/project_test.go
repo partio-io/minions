@@ -157,8 +157,12 @@ func TestDiscover(t *testing.T) {
 	// Create a workspace with a repo containing .minions/project.yaml
 	wsDir := t.TempDir()
 	repoDir := filepath.Join(wsDir, "myrepo", ".minions")
-	os.MkdirAll(repoDir, 0755)
-	os.WriteFile(filepath.Join(repoDir, "project.yaml"), []byte(testProjectYAML), 0644)
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "project.yaml"), []byte(testProjectYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	p := Discover(wsDir)
 	if p == nil {

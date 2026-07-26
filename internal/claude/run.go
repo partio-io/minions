@@ -25,13 +25,13 @@ type Opts struct {
 
 // Result holds structured output from a Claude invocation.
 type Result struct {
-	Subtype      string  // "success", "error_max_turns", etc.
-	ResultText   string
-	NumTurns     int
-	DurationMs   int
+	Subtype       string // "success", "error_max_turns", etc.
+	ResultText    string
+	NumTurns      int
+	DurationMs    int
 	DurationAPIMs int
-	TotalCostUSD float64
-	IsError      bool
+	TotalCostUSD  float64
+	IsError       bool
 
 	// Token usage from SDK ResultMessage.Usage
 	InputTokens              int

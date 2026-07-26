@@ -154,7 +154,7 @@ func runSliceLoop(ctx gocontext.Context, opts Opts, prog *program.Program, agent
 			return fail(err)
 		}
 		if tmpDir != "" {
-			defer os.RemoveAll(tmpDir)
+			defer func() { _ = os.RemoveAll(tmpDir) }()
 		}
 
 		sliceCtx := buildSliceIssueContext(opts.IssueTitle, opts.IssueBody, prdComment, plan, i)
@@ -162,7 +162,7 @@ func runSliceLoop(ctx gocontext.Context, opts Opts, prog *program.Program, agent
 
 		var logFile string
 		if opts.DebugDir != "" {
-			os.MkdirAll(opts.DebugDir, 0755)
+			_ = os.MkdirAll(opts.DebugDir, 0755)
 			_ = os.WriteFile(filepath.Join(opts.DebugDir, fmt.Sprintf("agent-%s-slice-%d-prompt.md", agent.Name, num)), []byte(promptText), 0644)
 			logFile = filepath.Join(opts.DebugDir, fmt.Sprintf("agent-%s-slice-%d-output.json", agent.Name, num))
 		}
@@ -276,7 +276,7 @@ func ensurePRs(ctx gocontext.Context, opts Opts, prog *program.Program, agent *p
 		return nil, err
 	}
 	if tmpDir != "" {
-		defer os.RemoveAll(tmpDir)
+		defer func() { _ = os.RemoveAll(tmpDir) }()
 	}
 	created, err := createAgentPRs(ctx, opts, prog, agent, taskID, claudeCWD, wtRepos)
 	if err != nil {

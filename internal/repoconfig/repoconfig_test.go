@@ -23,8 +23,12 @@ max_turns: 50
 func TestLoad(t *testing.T) {
 	dir := t.TempDir()
 	minionsDir := filepath.Join(dir, ".minions")
-	os.MkdirAll(minionsDir, 0755)
-	os.WriteFile(filepath.Join(minionsDir, "repo.yaml"), []byte(testRepoYAML), 0644)
+	if err := os.MkdirAll(minionsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(minionsDir, "repo.yaml"), []byte(testRepoYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	rc, err := Load(dir)
 	if err != nil {
@@ -66,8 +70,12 @@ func TestLoadOrDefault_Missing(t *testing.T) {
 func TestLoadOrDefault_Present(t *testing.T) {
 	dir := t.TempDir()
 	minionsDir := filepath.Join(dir, ".minions")
-	os.MkdirAll(minionsDir, 0755)
-	os.WriteFile(filepath.Join(minionsDir, "repo.yaml"), []byte(testRepoYAML), 0644)
+	if err := os.MkdirAll(minionsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(minionsDir, "repo.yaml"), []byte(testRepoYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	rc := LoadOrDefault(dir)
 	if rc.BuildInfo == "" {

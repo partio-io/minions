@@ -1,13 +1,15 @@
-linters:
-  enable:
-    - errcheck
-    - govet
-    - staticcheck
-    - unused
-    - ineffassign
-    - misspell
-    - goimports
+version: "2"
 
-linters-settings:
-  goimports:
-    local-prefixes: github.com/partio-io/minions
+linters:
+  # errcheck, govet, ineffassign, staticcheck, and unused are enabled by
+  # default in v2; only the extras are listed.
+  enable:
+    - misspell
+
+formatters:
+  enable:
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/partio-io/minions
