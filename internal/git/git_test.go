@@ -217,3 +217,77 @@ func TestListCommitSubjects_ErrorsOnUnknownRef(t *testing.T) {
 		t.Fatal("ListCommitSubjects: want error for unknown ref, got nil")
 	}
 }
+
+// setupOriginClone builds a bare origin with one commit on main and returns
+// (origin, clone).
+func setupOriginClone(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	seed := filepath.Join(root, "seed")
+	origin := filepath.Join(root, "origin.git")
+	clone := filepath.Join(root, "clone")
+	gitT(t, root, "init", "-q", "-b", "main", seed)
+	gitT(t, seed, "config", "user.name", "t")
+	gitT(t, seed, "config", "user.email", "t@t")
+	if err := os.WriteFile(filepath.Join(seed, "a.txt"), []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, seed, "add", "-A")
+	gitT(t, seed, "commit", "-q", "-m", "initial")
+	gitT(t, root, "clone", "-q", "--bare", seed, origin)
+	gitT(t, root, "clone", "-q", origin, clone)
+	gitT(t, clone, "config", "user.name", "t")
+	gitT(t, clone, "config", "user.email", "t@t")
+	return origin, clone
+}
+
+// TestPush_RecoversFromStaleLeaseAfterRemoteDelete reproduces the 2026-07-27
+// staged-run failure: the clone once pushed the branch (remote-tracking ref
+// recorded), the branch was later deleted on origin, and a fresh build wants
+// to push the recreated branch. A bare --force-with-lease trusts the stale
+// tracking ref and rejects with "stale info"; Push must refresh the lease
+// and succeed.
+func TestPush_RecoversFromStaleLeaseAfterRemoteDelete(t *testing.T) {
+	origin, clone := setupOriginClone(t)
+	gitT(t, clone, "checkout", "-q", "-b", "minion/task-1")
+	gitT(t, clone, "commit", "-q", "--allow-empty", "-m", "old build")
+	gitT(t, clone, "push", "-q", "-u", "origin", "minion/task-1")
+	gitT(t, origin, "branch", "-D", "minion/task-1")
+
+	gitT(t, clone, "commit", "-q", "--allow-empty", "-m", "new build")
+	if err := Push(clone, "minion/task-1"); err != nil {
+		t.Fatalf("Push after remote delete: %v", err)
+	}
+	want := gitT(t, clone, "rev-parse", "HEAD")
+	if got := gitT(t, origin, "rev-parse", "refs/heads/minion/task-1"); got != want {
+		t.Errorf("origin tip = %s; want %s", got, want)
+	}
+}
+
+// TestPush_OverwritesMovedRemoteAfterRefresh documents the machine-owned
+// semantic: a minion branch may be rebuilt even when origin's tip moved
+// behind the clone's back — the refreshed lease guards only the
+// fetch-to-push window.
+func TestPush_OverwritesMovedRemoteAfterRefresh(t *testing.T) {
+	origin, clone := setupOriginClone(t)
+	gitT(t, clone, "checkout", "-q", "-b", "minion/task-1")
+	gitT(t, clone, "commit", "-q", "--allow-empty", "-m", "our build")
+	gitT(t, clone, "push", "-q", "-u", "origin", "minion/task-1")
+
+	other := filepath.Join(t.TempDir(), "other")
+	gitT(t, filepath.Dir(other), "clone", "-q", origin, other)
+	gitT(t, other, "config", "user.name", "t")
+	gitT(t, other, "config", "user.email", "t@t")
+	gitT(t, other, "checkout", "-q", "minion/task-1")
+	gitT(t, other, "commit", "-q", "--allow-empty", "-m", "their change")
+	gitT(t, other, "push", "-q", "origin", "minion/task-1")
+
+	gitT(t, clone, "commit", "-q", "--allow-empty", "-m", "rebuild")
+	if err := Push(clone, "minion/task-1"); err != nil {
+		t.Fatalf("Push after remote moved: %v", err)
+	}
+	want := gitT(t, clone, "rev-parse", "HEAD")
+	if got := gitT(t, origin, "rev-parse", "refs/heads/minion/task-1"); got != want {
+		t.Errorf("origin tip = %s; want our rebuilt tip %s", got, want)
+	}
+}
