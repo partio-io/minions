@@ -27,6 +27,17 @@ func aheadOfOriginDefault(worktreePath string) bool {
 	return err == nil && strings.TrimSpace(out) != ""
 }
 
+// openPRURLForBranch returns the URL of the open PR whose head is branch in
+// repoFullName, or "" when none exists. A package-level seam so tests can
+// stub the gh call.
+var openPRURLForBranch = func(repoFullName, branch string) (string, error) {
+	out, err := exec.Command("gh", "pr", "list", "--repo", repoFullName, "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url // empty").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("gh pr list --head %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // Create stages, commits, pushes, and creates a PR for a minion's work.
 // Handles both uncommitted changes (stages + commits) and pre-committed changes (just pushes).
 // principalRepo is the full name of the principal repo (used in commit messages/PR bodies).
@@ -62,6 +73,17 @@ func Create(worktreePath, repoFullName, taskID, title, description, why string, 
 	// Push
 	if _, err := git.ExecGitDir(worktreePath, "push", "--force-with-lease", "-u", "origin", branchName); err != nil {
 		return "", fmt.Errorf("pushing branch: %w", err)
+	}
+
+	// A session may have opened the PR itself despite instructions, or a
+	// previous run may have died between creation and completion. Adopt an
+	// existing open PR instead of failing gh pr create with "already
+	// exists" — the push above already brought it up to date.
+	if url, err := openPRURLForBranch(repoFullName, branchName); err != nil {
+		slog.Warn("checking for existing PR failed; attempting create", "branch", branchName, "error", err)
+	} else if url != "" {
+		slog.Info("adopting existing open PR", "branch", branchName, "url", url)
+		return url, nil
 	}
 
 	// Build PR body

@@ -336,7 +336,7 @@ func debugDirForTask(taskID string) string {
 		return ""
 	}
 	dir := filepath.Join(base, taskID)
-	os.MkdirAll(dir, 0755)
+	_ = os.MkdirAll(dir, 0755)
 	return dir
 }
 

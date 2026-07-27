@@ -99,12 +99,12 @@ func Run(ctx gocontext.Context, opts Opts) (*Result, error) {
 		return nil, err
 	}
 	if tmpDir != "" {
-		defer os.RemoveAll(tmpDir)
+		defer func() { _ = os.RemoveAll(tmpDir) }()
 	}
 
 	// Save debug prompt
 	if opts.DebugDir != "" {
-		os.MkdirAll(opts.DebugDir, 0755)
+		_ = os.MkdirAll(opts.DebugDir, 0755)
 		_ = os.WriteFile(filepath.Join(opts.DebugDir, "planner-prompt.md"), []byte(promptText), 0644)
 	}
 
@@ -187,7 +187,7 @@ func buildCWD(worktreePaths, worktreeRepos []string) (cwd, tmpDir string, err er
 		}
 		for i, repo := range worktreeRepos {
 			if err := os.Symlink(worktreePaths[i], filepath.Join(virtualWS, repo)); err != nil {
-				os.RemoveAll(virtualWS)
+				_ = os.RemoveAll(virtualWS)
 				return "", "", fmt.Errorf("creating symlink for %s: %w", repo, err)
 			}
 		}

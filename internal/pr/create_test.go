@@ -82,3 +82,34 @@ func TestCreate_SkipsWhenNoChanges(t *testing.T) {
 		t.Fatalf("Create returned URL %q for a changeless checkout; want empty", url)
 	}
 }
+
+// TestCreate_AdoptsExistingOpenPR pins the recovery path the 2026-07-25
+// staged runs needed: when an open PR already exists for the minion branch
+// (e.g. a session opened one itself), Create pushes the branch and returns
+// the existing PR's URL instead of failing on `gh pr create`.
+func TestCreate_AdoptsExistingOpenPR(t *testing.T) {
+	repo := setupClone(t)
+	gitP(t, repo, "checkout", "-q", "-b", "minion/task-1")
+	if err := os.WriteFile(filepath.Join(repo, "b.txt"), []byte("two"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	restore := openPRURLForBranch
+	openPRURLForBranch = func(repoFullName, branch string) (string, error) {
+		if repoFullName != "acme/api" || branch != "minion/task-1" {
+			t.Errorf("lookup got (%q, %q); want (acme/api, minion/task-1)", repoFullName, branch)
+		}
+		return "https://github.com/acme/api/pull/7", nil
+	}
+	t.Cleanup(func() { openPRURLForBranch = restore })
+
+	url, err := Create(repo, "acme/api", "task-1", "title", "desc", "", nil, "acme/api", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if url != "https://github.com/acme/api/pull/7" {
+		t.Fatalf("url = %q; want the existing PR adopted", url)
+	}
+	// The branch must still have been pushed so the adopted PR carries the work.
+	gitP(t, repo, "ls-remote", "--exit-code", "--heads", "origin", "minion/task-1")
+}

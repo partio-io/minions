@@ -180,7 +180,7 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 
 	// Save debug prompt
 	if opts.DebugDir != "" {
-		os.MkdirAll(opts.DebugDir, 0755)
+		_ = os.MkdirAll(opts.DebugDir, 0755)
 		_ = os.WriteFile(filepath.Join(opts.DebugDir, "agent-"+agent.Name+"-prompt.md"), []byte(promptText), 0644)
 	}
 
@@ -226,7 +226,7 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 		return AgentResult{AgentName: agent.Name, Error: err}
 	}
 	if tmpDir != "" {
-		defer os.RemoveAll(tmpDir)
+		defer func() { _ = os.RemoveAll(tmpDir) }()
 	}
 
 	// Tools
@@ -429,9 +429,9 @@ func createAgentPRs(ctx gocontext.Context, opts Opts, prog *program.Program, age
 	if prURLsFile := os.Getenv("MINION_PR_URLS_FILE"); prURLsFile != "" {
 		if f, err := os.OpenFile(prURLsFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 			for _, u := range prURLs {
-				fmt.Fprintln(f, u)
+				_, _ = fmt.Fprintln(f, u)
 			}
-			f.Close()
+			_ = f.Close()
 		}
 	}
 
@@ -447,7 +447,7 @@ func buildCWD(worktreePaths, worktreeRepos []string) (cwd, tmpDir string, err er
 		}
 		for i, repo := range worktreeRepos {
 			if err := os.Symlink(worktreePaths[i], filepath.Join(virtualWS, repo)); err != nil {
-				os.RemoveAll(virtualWS)
+				_ = os.RemoveAll(virtualWS)
 				return "", "", fmt.Errorf("creating symlink for %s: %w", repo, err)
 			}
 		}

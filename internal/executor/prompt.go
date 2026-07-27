@@ -107,6 +107,7 @@ func buildAgentPrompt(prog *program.Program, agent *program.AgentDef, planText, 
 4. **Run checks.** After implementation, run the appropriate checks for each modified repo.
 5. **Fix failures.** If checks fail, read the error output carefully and fix the issue.
 6. **Keep changes minimal.** Implement exactly what the task asks for — nothing more.
+7. **Never push or open a pull request.** The runtime pushes your branch and creates the PR after you finish — even when the issue or task text mentions a PR as the expected outcome. Committing locally is welcome; ` + "`git push` and `gh pr create`" + ` are not yours to run.
 `)
 
 	return b.String()
