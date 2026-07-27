@@ -32,10 +32,19 @@ func CommitEmpty(dir, message string) error {
 	return err
 }
 
-// Push pushes branch to origin. --force-with-lease mirrors PR creation's
-// push, so a re-run that rebuilt the branch can overwrite its own remote
-// leftovers without being able to clobber anyone else's work.
+// Push pushes branch to origin with --force-with-lease, so a re-run that
+// rebuilt the branch can overwrite its own remote leftovers. The lease is
+// refreshed first: a long-lived clone's remote-tracking ref can be stale
+// (the branch was deleted or moved server-side), and a stale lease rejects
+// every push with "stale info". After the refresh the lease guards only the
+// fetch-to-push window — the right semantic for machine-owned minion
+// branches, which a re-run must always be able to rebuild.
 func Push(dir, branch string) error {
+	if _, err := ExecGitDir(dir, "fetch", "-q", "origin", "+refs/heads/"+branch+":refs/remotes/origin/"+branch); err != nil {
+		// Origin no longer has the branch; drop the stale tracking ref so
+		// the lease expects absence instead of the recorded old tip.
+		_, _ = ExecGitDir(dir, "update-ref", "-d", "refs/remotes/origin/"+branch)
+	}
 	_, err := ExecGitDir(dir, "push", "--force-with-lease", "-u", "origin", branch)
 	return err
 }

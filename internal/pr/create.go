@@ -70,8 +70,9 @@ func Create(worktreePath, repoFullName, taskID, title, description, why string, 
 		}
 	}
 
-	// Push
-	if _, err := git.ExecGitDir(worktreePath, "push", "--force-with-lease", "-u", "origin", branchName); err != nil {
+	// Push (git.Push refreshes the force-with-lease lease first, so a stale
+	// remote-tracking ref in a long-lived clone cannot reject the push)
+	if err := git.Push(worktreePath, branchName); err != nil {
 		return "", fmt.Errorf("pushing branch: %w", err)
 	}
 
