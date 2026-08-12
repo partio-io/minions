@@ -69,10 +69,16 @@ func FetchBranch(dir, branch string) error {
 	return err
 }
 
-// ListCommitSubjects returns the commit subjects reachable from ref in dir,
-// newest first.
-func ListCommitSubjects(dir, ref string) ([]string, error) {
-	out, err := ExecGitDir(dir, "log", "--format=%s", ref)
+// ListCommitSubjectsRange returns the subjects of the commits ref has and base
+// does not, in dir, newest first.
+//
+// The range is the point of this helper. Callers count the slice markers a run
+// left on its own branch, and every marker an earlier run merged into base is
+// still reachable from ref. Counting from ref alone therefore grows by six,
+// nine, twelve markers as minion work lands, until the count passes any plan's
+// slice total and every resume fails.
+func ListCommitSubjectsRange(dir, base, ref string) ([]string, error) {
+	out, err := ExecGitDir(dir, "log", "--format=%s", base+".."+ref)
 	if err != nil {
 		return nil, err
 	}
@@ -80,4 +86,29 @@ func ListCommitSubjects(dir, ref string) ([]string, error) {
 		return nil, nil
 	}
 	return strings.Split(out, "\n"), nil
+}
+
+// OriginDefaultBranch returns the short name of origin's default branch (e.g.
+// "main"), or "" if it cannot be determined. It prefers the locally recorded
+// origin/HEAD symref and falls back to rediscovering it from the remote.
+func OriginDefaultBranch(dir string) string {
+	read := func() string {
+		out, err := ExecGitDir(dir, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+		if err != nil {
+			return ""
+		}
+		return strings.TrimPrefix(strings.TrimSpace(out), "origin/")
+	}
+
+	if b := read(); b != "" {
+		return b
+	}
+	// origin/HEAD is not recorded locally (common on shallow CI clones); ask the
+	// remote to (re)discover it, then re-read.
+	if _, err := ExecGitDir(dir, "remote", "set-head", "origin", "--auto"); err == nil {
+		if b := read(); b != "" {
+			return b
+		}
+	}
+	return ""
 }

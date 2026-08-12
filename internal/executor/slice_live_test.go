@@ -286,6 +286,61 @@ func TestRun_SliceLoop_ResumeSkipsCompletedSlices(t *testing.T) {
 	}
 }
 
+// seedOriginMain lands commits on origin's default branch, standing in for
+// minion work that earlier runs already merged.
+func seedOriginMain(t *testing.T, originDir string, subjects []string) {
+	t.Helper()
+	seed := filepath.Join(t.TempDir(), "seed-main")
+	liveGit(t, t.TempDir(), "clone", "-q", originDir, seed)
+	for _, s := range subjects {
+		liveGit(t, seed, "commit", "-q", "--allow-empty", "-m", s)
+	}
+	liveGit(t, seed, "push", "-q", "origin", "main")
+}
+
+// TestRun_SliceLoop_ResumeIgnoresMarkersInheritedFromBase is the regression
+// guard for the count that broke every resume in a repo with merged minion
+// history. Main carries three markers from earlier runs and the minion branch
+// carries one of its own. Counting from the branch tip sees four against a
+// two-slice plan and aborts; counting the branch's own commits sees one and
+// resumes at slice 2.
+func TestRun_SliceLoop_ResumeIgnoresMarkersInheritedFromBase(t *testing.T) {
+	ws, origin := setupSliceWorkspace(t)
+	seedOriginMain(t, origin, []string{"minion:slice 1/3", "minion:slice 2/3", "minion:slice 3/3"})
+	seedOriginBranch(t, origin, []string{"file:slice-1.txt", "minion:slice 1/2"})
+	stubSeams(t)
+
+	var prompts []string
+	claudeRun = func(_ gocontext.Context, o claude.Opts) (*claude.Result, error) {
+		if !strings.Contains(o.Prompt, "Build only this slice") {
+			return &claude.Result{ResultText: "TITLE: t\n\nDESCRIPTION:\nd"}, nil
+		}
+		if err := os.WriteFile(filepath.Join(o.CWD, "slice-2.txt"), []byte("work"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		prompts = append(prompts, o.Prompt)
+		return &claude.Result{}, nil
+	}
+	checksRun = func(string) (string, error) { return "", nil }
+	prCreateAndLinkAll = func(string, string, string, string, string, string, []string, pr.FullNameFunc, string, *pr.CreateOpts) ([]string, error) {
+		return []string{"https://github.com/acme/api/pull/7"}, nil
+	}
+
+	res, err := Run(gocontext.Background(), liveSliceOpts(ws))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if ar := res.AgentResults[0]; ar.Error != nil {
+		t.Fatalf("agent error: %v — markers merged into main must not count against the plan", ar.Error)
+	}
+	if len(prompts) != 1 {
+		t.Fatalf("want 1 slice session (slice 1 already complete), got %d", len(prompts))
+	}
+	if !strings.Contains(prompts[0], "Build only this slice: Slice 2 — Dry-run expansion") {
+		t.Errorf("resumed session did not target slice 2:\n%s", prompts[0])
+	}
+}
+
 // TestRun_SliceLoop_ResumeIgnoresLocalOnlyBranchState covers the
 // never-trust-local rule: the workspace clone carries a local minion branch
 // claiming every slice is done, but origin only has slice 1's marker. Resume

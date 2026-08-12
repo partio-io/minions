@@ -290,6 +290,11 @@ func ensurePRs(ctx gocontext.Context, opts Opts, prog *program.Program, agent *p
 // whether the branch exists on origin at all. Local-only branch state is
 // never consulted. Repos that disagree with each other are a loud error —
 // resuming from a guess could silently rebuild or skip a slice.
+//
+// Markers are counted over the branch's own commits only, excluding the base
+// branch. Every completed minion run merges its markers into the base, so a
+// count reachable from the branch tip would carry those forward and eventually
+// exceed any plan's slice total.
 func resumeFromOrigin(workspaceRoot string, repos []string, branchName string, total int) (int, bool, error) {
 	completed, onOrigin, seen := 0, false, false
 	for _, repo := range repos {
@@ -306,7 +311,14 @@ func resumeFromOrigin(workspaceRoot string, repos []string, branchName string, t
 			if err := git.FetchBranch(repoPath, branchName); err != nil {
 				return 0, false, fmt.Errorf("fetching %s in %s: %w", branchName, repo, err)
 			}
-			subjects, err := git.ListCommitSubjects(repoPath, "origin/"+branchName)
+			base := git.OriginDefaultBranch(repoPath)
+			if base == "" {
+				return 0, false, fmt.Errorf("determining origin's default branch in %s: cannot count slice markers without a base", repo)
+			}
+			if err := git.FetchBranch(repoPath, base); err != nil {
+				return 0, false, fmt.Errorf("fetching %s in %s: %w", base, repo, err)
+			}
+			subjects, err := git.ListCommitSubjectsRange(repoPath, "origin/"+base, "origin/"+branchName)
 			if err != nil {
 				return 0, false, fmt.Errorf("listing commits of origin/%s in %s: %w", branchName, repo, err)
 			}
