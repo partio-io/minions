@@ -2,8 +2,9 @@
 //
 // A sliced run commits one empty marker commit after each slice. The package
 // partitions the commits of the run's own branch on those markers and
-// extracts the package-level Go declarations each slice added, so that a
-// later slice can see the work before it and does not rebuild it.
+// extracts the package-level Go declarations and the files each slice added,
+// so that a later slice can see the work before it, does not rebuild it, and
+// does not undo it.
 package sliceguard
 
 import (
@@ -45,6 +46,12 @@ type span struct {
 // builds, and a declaration base dropped after the fork is not the first
 // slice's work. A file the analysis cannot read or parse at a boundary yields
 // no contributions and no error.
+//
+// The result reflects the branch at the last completed marker: a declaration
+// that a later completed slice removed is no contribution any more, and one
+// that a later completed slice moved is reported under the file that holds
+// it there. Otherwise a slice would be told to use, or to restore, work an
+// earlier slice already took away.
 func Contributions(dir, base, ref string, num int) ([]Contribution, error) {
 	commits, err := git.ListCommitsRange(dir, base, ref)
 	if err != nil {
@@ -55,11 +62,13 @@ func Contributions(dir, base, ref string, num int) ([]Contribution, error) {
 		return nil, err
 	}
 	var out []Contribution
+	var lastEnd string
 	for _, sp := range partition(commits, fork) {
 		if sp.slice >= num {
 			break
 		}
-		before := map[string]map[string]bool{}
+		lastEnd = sp.end
+		before := map[string]map[string]string{}
 		for _, file := range sp.files {
 			if !isSource(file) {
 				continue
@@ -69,13 +78,33 @@ func Contributions(dir, base, ref string, num int) ([]Contribution, error) {
 				before[pkgDir] = packageDeclarations(dir, sp.start, pkgDir)
 			}
 			for _, name := range declarations(dir, sp.end, file) {
-				if !before[pkgDir][name] {
+				if _, ok := before[pkgDir][name]; !ok {
 					out = append(out, Contribution{Identifier: name, File: file, Slice: sp.slice})
 				}
 			}
 		}
 	}
-	return out, nil
+	return atRevision(dir, lastEnd, out), nil
+}
+
+// atRevision keeps the contributions whose package still declares them at
+// rev, under the file that declares them there, and drops the rest.
+func atRevision(dir, rev string, built []Contribution) []Contribution {
+	var out []Contribution
+	current := map[string]map[string]string{}
+	for _, c := range built {
+		pkgDir := path.Dir(c.File)
+		if _, ok := current[pkgDir]; !ok {
+			current[pkgDir] = packageDeclarations(dir, rev, pkgDir)
+		}
+		file, ok := current[pkgDir][c.Identifier]
+		if !ok {
+			continue
+		}
+		c.File = file
+		out = append(out, c)
+	}
+	return out
 }
 
 // partition groups commits, given newest first, into one span per completed
@@ -130,12 +159,13 @@ func skipDir(name string) bool {
 	return strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata"
 }
 
-// packageDeclarations returns the set of package-level identifiers that the
-// source files directly under pkgDir declare at rev. A slice that moves a
-// declaration between files of one package, or renames the file, does not
-// add it: the package already declared it.
-func packageDeclarations(dir, rev, pkgDir string) map[string]bool {
-	set := map[string]bool{}
+// packageDeclarations returns the package-level identifiers that the source
+// files directly under pkgDir declare at rev, each with the file that
+// declares it. A slice that moves a declaration between files of one
+// package, or renames the file, does not add it: the package already
+// declared it.
+func packageDeclarations(dir, rev, pkgDir string) map[string]string {
+	set := map[string]string{}
 	files, err := git.ListTreeFiles(dir, rev, pkgDir)
 	if err != nil {
 		slog.Debug("sliceguard: cannot list package files", "dir", pkgDir, "rev", rev, "err", err)
@@ -146,7 +176,7 @@ func packageDeclarations(dir, rev, pkgDir string) map[string]bool {
 			continue
 		}
 		for _, name := range declarations(dir, rev, file) {
-			set[name] = true
+			set[name] = file
 		}
 	}
 	return set

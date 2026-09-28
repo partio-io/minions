@@ -335,7 +335,7 @@ func TestFailureText(t *testing.T) {
 	text := FailureText([]Contribution{
 		{Identifier: "ParseReport", File: "report/report.go", Slice: 1},
 		{Identifier: "Render", File: "api/report/render.go", Slice: 2},
-	})
+	}, nil)
 	for _, want := range []string{
 		"`ParseReport`", "report/report.go", "slice 1",
 		"`Render`", "api/report/render.go", "slice 2",

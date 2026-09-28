@@ -1047,6 +1047,162 @@ func TestRun_SliceLoop_GuardRepairFails_StopsChainWithEarlierSlicesPushed(t *tes
 	}
 }
 
+// TestRun_SliceLoop_GuardRestoresDeletedFile covers the guard's other half
+// through the live loop: slice 2 moves slice 1's declaration into its own
+// file and deletes slice 1's file. The declaration is still referenced, so
+// only the deletion fails the slice's checks. One fix session runs with the
+// restore text, restores the file, re-verification passes, and the run
+// reaches the PR with no repair line in it and no issue comment.
+func TestRun_SliceLoop_GuardRestoresDeletedFile(t *testing.T) {
+	ws, origin := setupSliceWorkspace(t)
+	stubSeams(t)
+
+	const sliceOne = "package built\n\nfunc Slice1() {}\n"
+	var prompts []string
+	claudeRun = func(_ gocontext.Context, o claude.Opts) (*claude.Result, error) {
+		prompts = append(prompts, o.Prompt)
+		switch {
+		case strings.Contains(o.Prompt, "Build only this slice: Slice 1"):
+			writeBuilt(t, o.CWD, "slice1.go", sliceOne)
+		case strings.Contains(o.Prompt, "Build only this slice: Slice 2"):
+			// The undo: slice 2 folds slice 1's file into its own and removes it.
+			if err := os.Remove(filepath.Join(o.CWD, "built", "slice1.go")); err != nil {
+				t.Fatal(err)
+			}
+			writeBuilt(t, o.CWD, "slice2.go", "package built\n\nfunc Slice2() { Slice1() }\n\nfunc Slice1() {}\n")
+		case strings.Contains(o.Prompt, "Slice boundary guard"):
+			// The repair: restore the earlier file and use it.
+			writeBuilt(t, o.CWD, "slice1.go", sliceOne)
+			writeBuilt(t, o.CWD, "slice2.go", "package built\n\nfunc Slice2() { Slice1() }\n")
+		default:
+			return &claude.Result{ResultText: "TITLE: t\n\nDESCRIPTION:\nd"}, nil
+		}
+		return &claude.Result{}, nil
+	}
+	checkCalls := 0
+	checksRun = func(string) (string, error) { checkCalls++; return "", nil }
+	var prTexts []string
+	prCreateAndLinkAll = func(_, title, description, why, _, _ string, _ []string, _ pr.FullNameFunc, _ string, _ *pr.CreateOpts) ([]string, error) {
+		prTexts = append(prTexts, title, description, why)
+		return []string{"https://github.com/acme/api/pull/7"}, nil
+	}
+	posts := 0
+	postIssueComment = func(string, string, string) error { posts++; return nil }
+
+	res, err := Run(gocontext.Background(), liveSliceOpts(ws))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if ar := res.AgentResults[0]; ar.Error != nil {
+		t.Fatalf("agent error: %v", ar.Error)
+	}
+
+	// Session order: slice 1 build, slice 2 build, guard fix-it, summarize.
+	if len(prompts) != 4 {
+		t.Fatalf("want 4 sessions (build, build, fix-it, summarize), got %d", len(prompts))
+	}
+	fix := prompts[2]
+	for _, want := range []string{"built/slice1.go, added by slice 1", "restore"} {
+		if !strings.Contains(fix, want) {
+			t.Errorf("fix-it prompt lacks %q:\n%s", want, fix)
+		}
+	}
+	if strings.Contains(fix, "`Slice1`") {
+		t.Errorf("fix-it prompt reports Slice1 abandoned while slice 2 references it:\n%s", fix)
+	}
+	if checkCalls != 3 {
+		t.Errorf("deterministic check runs = %d; want 3 (slice 1, slice 2, slice 2 re-verify)", checkCalls)
+	}
+	originLog := liveGit(t, origin, "log", liveBranch, "--format=%s")
+	for _, marker := range []string{"minion:slice 1/2", "minion:slice 2/2"} {
+		if !strings.Contains(originLog, marker) {
+			t.Errorf("origin branch missing marker %q after guard repair:\n%s", marker, originLog)
+		}
+	}
+	if out := liveGit(t, origin, "ls-tree", "--name-only", liveBranch, "built/"); !strings.Contains(out, "built/slice1.go") {
+		t.Errorf("restored built/slice1.go is not on origin after the repair:\n%s", out)
+	}
+	if len(prTexts) != 3 {
+		t.Fatalf("PR creation called %d times; want 1", len(prTexts)/3)
+	}
+	for _, text := range prTexts {
+		if strings.Contains(text, "Slice boundary guard") || strings.Contains(text, "restore") {
+			t.Errorf("PR text carries a line about the silent repair:\n%s", text)
+		}
+	}
+	if posts != 0 {
+		t.Errorf("issue comments posted = %d on a silent repair; want 0", posts)
+	}
+}
+
+// TestRun_SliceLoop_GuardDeletionUnrepaired_StopsChain covers the deletion
+// finding's abort path: the fix session does not restore slice 1's file, so
+// slice 2 fails after its one retry, the run stops there with slice 1
+// pushed, no PR is created, and the usual failure comment lands on the
+// issue.
+func TestRun_SliceLoop_GuardDeletionUnrepaired_StopsChain(t *testing.T) {
+	ws, origin := setupSliceWorkspace(t)
+	stubSeams(t)
+
+	var prompts []string
+	claudeRun = func(_ gocontext.Context, o claude.Opts) (*claude.Result, error) {
+		prompts = append(prompts, o.Prompt)
+		switch {
+		case strings.Contains(o.Prompt, "Build only this slice: Slice 1"):
+			writeBuilt(t, o.CWD, "slice1.go", "package built\n\nfunc Slice1() {}\n")
+		case strings.Contains(o.Prompt, "Build only this slice: Slice 2"):
+			if err := os.Remove(filepath.Join(o.CWD, "built", "slice1.go")); err != nil {
+				t.Fatal(err)
+			}
+			writeBuilt(t, o.CWD, "slice2.go", "package built\n\nfunc Slice2() { Slice1() }\n\nfunc Slice1() {}\n")
+		}
+		// The fix session changes nothing: the file stays deleted.
+		return &claude.Result{}, nil
+	}
+	checksRun = func(string) (string, error) { return "", nil }
+	prCalled := 0
+	prCreateAndLinkAll = func(string, string, string, string, string, string, []string, pr.FullNameFunc, string, *pr.CreateOpts) ([]string, error) {
+		prCalled++
+		return nil, nil
+	}
+	var posts []string
+	postIssueComment = func(_, _, body string) error { posts = append(posts, body); return nil }
+
+	res, err := Run(gocontext.Background(), liveSliceOpts(ws))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ar := res.AgentResults[0]
+	if ar.Error == nil {
+		t.Fatal("agent result error = nil; want failure for slice 2 exhausting its retry")
+	}
+	if !strings.Contains(ar.Error.Error(), "slice 2/2: checks failed after retry") {
+		t.Errorf("error %q is not the existing failed-checks error for slice 2", ar.Error)
+	}
+
+	// Sessions: slice 1 build, slice 2 build, one guard fix-it. No summarize.
+	if len(prompts) != 3 {
+		t.Fatalf("want 3 sessions (build, build, fix-it), got %d", len(prompts))
+	}
+	if !strings.Contains(prompts[2], "built/slice1.go, added by slice 1") {
+		t.Errorf("session 3 is not the guard's fix-it session for the deleted file:\n%s", prompts[2])
+	}
+
+	originLog := liveGit(t, origin, "log", liveBranch, "--format=%s")
+	if !strings.Contains(originLog, "minion:slice 1/2") {
+		t.Errorf("completed slice 1 not pushed on origin:\n%s", originLog)
+	}
+	if strings.Contains(originLog, "minion:slice 2/2") {
+		t.Errorf("failed slice 2 has a completion marker on origin:\n%s", originLog)
+	}
+	if prCalled != 0 {
+		t.Errorf("PR creation called %d times on a failed run; want 0", prCalled)
+	}
+	if len(posts) != 1 || !strings.Contains(posts[0], "slice 2/2") {
+		t.Errorf("issue comments = %q; want exactly one naming slice 2/2", posts)
+	}
+}
+
 // guardCheckout builds one repository checkout with an origin: main holds a
 // README, the run's branch holds slice 1's Go file behind its marker, and
 // disk holds slice 2's uncommitted state. It returns the checkout path.
@@ -1194,6 +1350,50 @@ func TestGuardVerifier_ExemptsLaterConsumer(t *testing.T) {
 		pass, out := guardVerifier([]string{api}, []string{"api"}, liveBranch, parse("Unrelated work"), 2)()
 		if pass || !strings.Contains(out, "`Slice1`") {
 			t.Errorf("guardVerifier = (%v, %q); want a failure naming Slice1", pass, out)
+		}
+	})
+}
+
+// TestGuardVerifier_FailsOnDeletedEarlierFile proves the deletion finding
+// through the verifier the slice loop runs: slice 1 added built/slice1.go,
+// and slice 2 moved its declaration into its own file and removed slice 1's
+// file. The declaration is still referenced, so abandonment alone is silent;
+// the deletion fails the verifier with the restore repair. With two
+// checkouts the file carries its repository prefix, as the fix session's
+// working directory lays it out.
+func TestGuardVerifier_FailsOnDeletedEarlierFile(t *testing.T) {
+	const decl = "package built\n\nfunc Slice1() {}\n"
+	moved := map[string]string{"built/slice2.go": "package built\n\nfunc Slice2() { Slice1() }\n\nfunc Slice1() {}\n"}
+	t.Run("one checkout", func(t *testing.T) {
+		api := guardCheckout(t, "api", decl, moved)
+		if err := os.Remove(filepath.Join(api, "built", "slice1.go")); err != nil {
+			t.Fatal(err)
+		}
+		pass, out := guardVerifier([]string{api}, []string{"api"}, liveBranch, nil, 2)()
+		if pass {
+			t.Fatalf("guardVerifier = (true, %q); want a failure for the deleted file", out)
+		}
+		for _, want := range []string{"built/slice1.go, added by slice 1", "restore"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("guardVerifier output lacks %q:\n%s", want, out)
+			}
+		}
+		if strings.Contains(out, "`Slice1`") {
+			t.Errorf("guardVerifier reports Slice1 abandoned while slice 2 references it:\n%s", out)
+		}
+	})
+	t.Run("two checkouts prefix the repository", func(t *testing.T) {
+		api := guardCheckout(t, "api", decl, moved)
+		if err := os.Remove(filepath.Join(api, "built", "slice1.go")); err != nil {
+			t.Fatal(err)
+		}
+		web := guardCheckout(t, "web", decl, map[string]string{"built/slice2.go": "package built\n\nfunc Slice2() { Slice1() }\n"})
+		pass, out := guardVerifier([]string{api, web}, []string{"api", "web"}, liveBranch, nil, 2)()
+		if pass || !strings.Contains(out, "api/built/slice1.go, added by slice 1") {
+			t.Errorf("guardVerifier = (%v, %q); want a failure naming api/built/slice1.go", pass, out)
+		}
+		if strings.Contains(out, "web/") {
+			t.Errorf("guardVerifier names web, whose tree is intact:\n%s", out)
 		}
 	})
 }

@@ -79,19 +79,24 @@ func sliceVerification(agent *program.AgentDef, worktreePaths, worktreeRepos []s
 
 // guardVerifier runs the slice boundary guard over the worktrees: it fails
 // when an earlier slice's contribution has no reference left in the working
-// tree, and its failure text is what scopes the fix session. Slice one has
-// no earlier slice and always passes. A contribution a later slice of plan
-// names is not abandoned yet, and does not fail the run.
+// tree, or when a file an earlier slice added is no longer in it, and its
+// failure text is what scopes the fix session. Slice one has no earlier
+// slice and always passes. A contribution a later slice of plan names is
+// not abandoned yet, and does not fail the run.
 func guardVerifier(worktreePaths, worktreeRepos []string, branchName string, plan *slices.Plan, num int) verifier {
 	return func() (bool, string) {
 		abandoned := abandonedContributions(worktreePaths, worktreeRepos, branchName, plan, num)
-		if len(abandoned) == 0 {
+		deleted := deletedFiles(worktreePaths, worktreeRepos, branchName, num)
+		if len(abandoned) == 0 && len(deleted) == 0 {
 			return true, ""
 		}
 		for _, c := range abandoned {
 			slog.Warn("slice boundary guard: earlier contribution abandoned", "identifier", c.Identifier, "file", c.File, "added_by_slice", c.Slice, "slice", num)
 		}
-		return false, sliceguard.FailureText(abandoned)
+		for _, d := range deleted {
+			slog.Warn("slice boundary guard: earlier file deleted", "file", d.File, "added_by_slice", d.Slice, "slice", num)
+		}
+		return false, sliceguard.FailureText(abandoned, deleted)
 	}
 }
 

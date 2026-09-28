@@ -28,19 +28,19 @@ PRD story 9.
 
 ## Acceptance criteria
 
-- [ ] The guard reports a finding when the working tree no longer
+- [x] The guard reports a finding when the working tree no longer
       contains a file an earlier slice in this run added.
-- [ ] The finding names the deleted file and the slice that added it,
+- [x] The finding names the deleted file and the slice that added it,
       and states that the repair is to restore and reuse it.
-- [ ] The finding fails the slice's checks through the same verification
+- [x] The finding fails the slice's checks through the same verification
       value as an abandoned declaration.
-- [ ] A repaired deletion lets the run continue, with no pull request
+- [x] A repaired deletion lets the run continue, with no pull request
       line and no issue comment.
-- [ ] A deletion the fix session does not repair fails the slice and
+- [x] A deletion the fix session does not repair fails the slice and
       stops the run, with earlier slices still pushed.
-- [ ] A file the base branch carried, deleted by a slice, is not
+- [x] A file the base branch carried, deleted by a slice, is not
       reported; only files this run's earlier slices added.
-- [ ] A file an earlier slice added and the current slice renamed is
+- [x] A file an earlier slice added and the current slice renamed is
       reported, since the earlier path no longer exists.
 
 ## Modules touched

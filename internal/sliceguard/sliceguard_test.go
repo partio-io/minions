@@ -286,3 +286,32 @@ func TestContributions_ErrorsOnUnknownRef(t *testing.T) {
 		t.Fatal("Contributions: want error for unknown ref, got nil")
 	}
 }
+
+// TestContributions_LaterSliceRemovedOrMoved: the result reflects the
+// branch at the last completed marker. A declaration slice one added and
+// slice two removed is no contribution for slice three, and one slice two
+// moved into another file of the package is reported under that file.
+func TestContributions_LaterSliceRemovedOrMoved(t *testing.T) {
+	repo := buildRepo(t, map[string]string{"go.mod": goMod}, 3, []step{
+		{files: map[string]string{"built/slice1.go": "package built\n\nfunc Gone() {}\n\nfunc Moved() {}\n"}},
+		{marker: 1},
+		{files: map[string]string{"built/slice2.go": "package built\n\nfunc Moved() {}\n\nfunc Slice2() {}\n"}, remove: []string{"built/slice1.go"}},
+		{marker: 2},
+	})
+	got, err := Contributions(repo, "main", "minion/task-1", 3)
+	if err != nil {
+		t.Fatalf("Contributions: %v", err)
+	}
+	want := []Contribution{
+		{Identifier: "Moved", File: "built/slice2.go", Slice: 1},
+		{Identifier: "Slice2", File: "built/slice2.go", Slice: 2},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("Contributions = %+v; want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Contributions[%d] = %+v; want %+v", i, got[i], want[i])
+		}
+	}
+}

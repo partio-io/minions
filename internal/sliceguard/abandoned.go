@@ -333,23 +333,33 @@ func (r references) packageName(importPath string) string {
 	return path.Base(importPath)
 }
 
-// FailureText is the check output for a set of abandoned contributions. It is
-// the whole prompt context the fix session gets, so it names each identifier,
-// its file and the slice that added it, and states the one repair the guard
-// accepts: the current slice calls the earlier code and drops what it wrote
-// instead. Deleting the earlier code is the outcome the guard exists to
-// prevent, and the text says so. The text ends on its own line.
-func FailureText(abandoned []Contribution) string {
-	if len(abandoned) == 0 {
-		return ""
-	}
+// FailureText is the check output for the guard's findings: the abandoned
+// contributions and the deleted files. It is the whole prompt context the
+// fix session gets, so it names each finding with its file and the slice
+// that added it, and states the one repair the guard accepts for each kind:
+// the current slice calls the earlier code and drops what it wrote instead,
+// or restores the file the earlier slice added and uses it. Deleting the
+// earlier code is the outcome the guard exists to prevent, and the text says
+// so. The text ends on its own line, and is empty without findings.
+func FailureText(abandoned []Contribution, deleted []Deletion) string {
 	var b strings.Builder
-	b.WriteString("Slice boundary guard: an earlier slice built code that nothing references any more.\n")
-	for _, c := range abandoned {
-		fmt.Fprintf(&b, "- `%s` in %s, added by slice %d\n", c.Identifier, c.File, c.Slice)
+	if len(abandoned) > 0 {
+		b.WriteString("Slice boundary guard: an earlier slice built code that nothing references any more.\n")
+		for _, c := range abandoned {
+			fmt.Fprintf(&b, "- `%s` in %s, added by slice %d\n", c.Identifier, c.File, c.Slice)
+		}
+		b.WriteString("This slice wrote a duplicate of that work instead of using it. ")
+		b.WriteString("Repair: call the earlier code from this slice's code, and drop the duplicate this slice wrote. ")
+		b.WriteString("Do not delete or rename the earlier code.\n")
 	}
-	b.WriteString("This slice wrote a duplicate of that work instead of using it. ")
-	b.WriteString("Repair: call the earlier code from this slice's code, and drop the duplicate this slice wrote. ")
-	b.WriteString("Do not delete or rename the earlier code.\n")
+	if len(deleted) > 0 {
+		b.WriteString("Slice boundary guard: an earlier slice added a file that the working tree no longer holds.\n")
+		for _, d := range deleted {
+			fmt.Fprintf(&b, "- %s, added by slice %d\n", d.File, d.Slice)
+		}
+		b.WriteString("This slice deleted or renamed that file instead of using it. ")
+		b.WriteString("Repair: restore the file at that path with the earlier slice's content, and use it from this slice's code. ")
+		b.WriteString("Do not delete or rename the earlier code.\n")
+	}
 	return b.String()
 }

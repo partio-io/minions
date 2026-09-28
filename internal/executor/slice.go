@@ -424,6 +424,28 @@ func abandonedContributions(dirs, repos []string, branchName string, plan *slice
 	})
 }
 
+// deletedFiles reports the files the earlier slices added that the working
+// tree of each checkout no longer holds, for the boundary guard of slice
+// num. Files are prefixed by repository name as in collectContributions.
+func deletedFiles(dirs, repos []string, branchName string, num int) []sliceguard.Deletion {
+	if num <= 1 {
+		return nil
+	}
+	var out []sliceguard.Deletion
+	eachCheckoutBranch(dirs, repos, func(i int, dir, base string) error {
+		deleted, err := sliceguard.Deleted(dir, base, branchName, num)
+		if err != nil {
+			return err
+		}
+		for _, d := range deleted {
+			d.File = prefixRepo(repos, i, d.File)
+			out = append(out, d)
+		}
+		return nil
+	})
+	return out
+}
+
 // collectContributions reads the contributions of the slices before num in
 // each repository checkout, passes each checkout's list through pick with
 // the checkout's path, and joins the results. Slice one has no earlier slice
@@ -436,23 +458,44 @@ func collectContributions(dirs, repos []string, branchName string, num int, pick
 		return nil
 	}
 	var out []sliceguard.Contribution
+	eachCheckoutBranch(dirs, repos, func(i int, dir, base string) error {
+		built, err := sliceguard.Contributions(dir, base, branchName, num)
+		if err != nil {
+			return err
+		}
+		for _, c := range pick(dir, built) {
+			c.File = prefixRepo(repos, i, c.File)
+			out = append(out, c)
+		}
+		return nil
+	})
+	return out
+}
+
+// eachCheckoutBranch calls read once per repository checkout with the
+// checkout's index, its path and the ref of origin's default branch, which
+// the slice analyses take as their base. A checkout whose default branch
+// cannot be determined, or whose branch read fails, is skipped with a
+// warning: the analysis never stops a run.
+func eachCheckoutBranch(dirs, repos []string, read func(i int, dir, base string) error) {
 	for i, dir := range dirs {
 		base := git.OriginDefaultBranch(dir)
 		if base == "" {
 			slog.Warn("slice contributions: cannot determine origin's default branch, skipping", "repo", repos[i])
 			continue
 		}
-		built, err := sliceguard.Contributions(dir, "origin/"+base, branchName, num)
-		if err != nil {
+		if err := read(i, dir, "origin/"+base); err != nil {
 			slog.Warn("slice contributions: cannot read the branch, skipping", "repo", repos[i], "err", err)
-			continue
-		}
-		for _, c := range pick(dir, built) {
-			if len(repos) > 1 {
-				c.File = repos[i] + "/" + c.File
-			}
-			out = append(out, c)
 		}
 	}
-	return out
+}
+
+// prefixRepo returns file under the name of repository i when the build
+// spans more than one repository, matching the layout of the session's
+// working directory, and unchanged otherwise.
+func prefixRepo(repos []string, i int, file string) string {
+	if len(repos) > 1 {
+		return repos[i] + "/" + file
+	}
+	return file
 }
