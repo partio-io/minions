@@ -12,6 +12,7 @@ import (
 	"github.com/partio-io/minions/internal/claude"
 	"github.com/partio-io/minions/internal/pr"
 	"github.com/partio-io/minions/internal/project"
+	"github.com/partio-io/minions/internal/sliceguard"
 	"github.com/partio-io/minions/internal/slices"
 )
 
@@ -114,8 +115,12 @@ func TestRun_SliceLoop_AdvancesPerSliceAndCreatesPROnlyAfterFinal(t *testing.T) 
 			t.Fatal(err)
 		}
 		// One Go declaration per slice, so slice 2's prompt has something
-		// to list under "Already Built".
-		src := fmt.Sprintf("package built\n\nfunc Slice%d() {}\n", n)
+		// to list under "Already Built". Slice 2 calls slice 1's code, as
+		// the boundary guard requires of a well-behaved slice.
+		src := "package built\n\nfunc Slice1() {}\n"
+		if n == 2 {
+			src = "package built\n\nfunc Slice2() { Slice1() }\n"
+		}
 		if err := os.MkdirAll(filepath.Join(o.CWD, "built"), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -889,4 +894,359 @@ func TestRun_PostsNoIssueCommentOutsideSliceFailure(t *testing.T) {
 			t.Errorf("plan-less failing run posted %d issue comments; want 0 — the failure comment belongs to the slice path only", *posts)
 		}
 	})
+}
+
+// writeBuilt writes one Go source file into the built package of the
+// session's working directory: the shape of a slice's contribution.
+func writeBuilt(t *testing.T, cwd, name, src string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(cwd, "built"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "built", name), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRun_SliceLoop_GuardRepairThenPass covers the headline of the slice
+// boundary guard: slice 2 rebuilds what slice 1 built and leaves slice 1's
+// declaration unreferenced, the guard fails the slice's checks, exactly one
+// fix session runs with the guard's text, the fix calls the earlier code,
+// re-verification passes, and the run continues to the PR. The repair is
+// silent: no issue comment.
+func TestRun_SliceLoop_GuardRepairThenPass(t *testing.T) {
+	ws, origin := setupSliceWorkspace(t)
+	stubSeams(t)
+
+	var prompts []string
+	claudeRun = func(_ gocontext.Context, o claude.Opts) (*claude.Result, error) {
+		prompts = append(prompts, o.Prompt)
+		switch {
+		case strings.Contains(o.Prompt, "Build only this slice: Slice 1"):
+			writeBuilt(t, o.CWD, "slice1.go", "package built\n\nfunc Slice1() {}\n")
+		case strings.Contains(o.Prompt, "Build only this slice: Slice 2"):
+			// The duplicate: slice 2 rebuilds slice 1's work and never calls it.
+			writeBuilt(t, o.CWD, "slice2.go", "package built\n\nfunc Slice2() { again() }\n\nfunc again() {}\n")
+		case strings.Contains(o.Prompt, "Slice boundary guard"):
+			// The repair: call the earlier code, drop the duplicate.
+			writeBuilt(t, o.CWD, "slice2.go", "package built\n\nfunc Slice2() { Slice1() }\n")
+		default:
+			return &claude.Result{ResultText: "TITLE: t\n\nDESCRIPTION:\nd"}, nil
+		}
+		return &claude.Result{}, nil
+	}
+	checkCalls := 0
+	checksRun = func(string) (string, error) { checkCalls++; return "", nil }
+	prCalled := 0
+	prCreateAndLinkAll = func(string, string, string, string, string, string, []string, pr.FullNameFunc, string, *pr.CreateOpts) ([]string, error) {
+		prCalled++
+		return []string{"https://github.com/acme/api/pull/7"}, nil
+	}
+	posts := 0
+	postIssueComment = func(string, string, string) error { posts++; return nil }
+
+	res, err := Run(gocontext.Background(), liveSliceOpts(ws))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if ar := res.AgentResults[0]; ar.Error != nil {
+		t.Fatalf("agent error: %v", ar.Error)
+	}
+
+	// Session order: slice 1 build, slice 2 build, guard fix-it, summarize.
+	if len(prompts) != 4 {
+		t.Fatalf("want 4 sessions (build, build, fix-it, summarize), got %d", len(prompts))
+	}
+	fix := prompts[2]
+	if strings.Contains(fix, "Build only this slice") {
+		t.Errorf("session 3 is a build session, not the guard's fix-it session")
+	}
+	for _, want := range []string{"`Slice1`", "built/slice1.go", "slice 1", "call the earlier code", "drop the duplicate"} {
+		if !strings.Contains(fix, want) {
+			t.Errorf("fix-it prompt lacks %q:\n%s", want, fix)
+		}
+	}
+	if checkCalls != 3 {
+		t.Errorf("deterministic check runs = %d; want 3 (slice 1, slice 2, slice 2 re-verify)", checkCalls)
+	}
+	originLog := liveGit(t, origin, "log", liveBranch, "--format=%s")
+	for _, marker := range []string{"minion:slice 1/2", "minion:slice 2/2"} {
+		if !strings.Contains(originLog, marker) {
+			t.Errorf("origin branch missing marker %q after guard repair:\n%s", marker, originLog)
+		}
+	}
+	if prCalled != 1 {
+		t.Errorf("PR creation called %d times; want 1", prCalled)
+	}
+	if posts != 0 {
+		t.Errorf("issue comments posted = %d on a silent repair; want 0", posts)
+	}
+}
+
+// TestRun_SliceLoop_GuardRepairFails_StopsChainWithEarlierSlicesPushed covers
+// the guard's abort path: the fix session does not repair the tree, so slice
+// 2 fails after its one retry, the run stops there with slice 1 pushed, no
+// PR is created, and the usual failure comment lands on the issue.
+func TestRun_SliceLoop_GuardRepairFails_StopsChainWithEarlierSlicesPushed(t *testing.T) {
+	ws, origin := setupSliceWorkspace(t)
+	stubSeams(t)
+
+	var prompts []string
+	claudeRun = func(_ gocontext.Context, o claude.Opts) (*claude.Result, error) {
+		prompts = append(prompts, o.Prompt)
+		switch {
+		case strings.Contains(o.Prompt, "Build only this slice: Slice 1"):
+			writeBuilt(t, o.CWD, "slice1.go", "package built\n\nfunc Slice1() {}\n")
+		case strings.Contains(o.Prompt, "Build only this slice: Slice 2"):
+			writeBuilt(t, o.CWD, "slice2.go", "package built\n\nfunc Slice2() { again() }\n\nfunc again() {}\n")
+		}
+		// The fix session changes nothing: the duplicate stays.
+		return &claude.Result{}, nil
+	}
+	checksRun = func(string) (string, error) { return "", nil }
+	prCalled := 0
+	prCreateAndLinkAll = func(string, string, string, string, string, string, []string, pr.FullNameFunc, string, *pr.CreateOpts) ([]string, error) {
+		prCalled++
+		return nil, nil
+	}
+	var posts []string
+	postIssueComment = func(_, _, body string) error { posts = append(posts, body); return nil }
+
+	res, err := Run(gocontext.Background(), liveSliceOpts(ws))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ar := res.AgentResults[0]
+	if ar.Error == nil {
+		t.Fatal("agent result error = nil; want failure for slice 2 exhausting its retry")
+	}
+	if !strings.Contains(ar.Error.Error(), "slice 2/2: checks failed after retry") {
+		t.Errorf("error %q is not the existing failed-checks error for slice 2", ar.Error)
+	}
+
+	// Sessions: slice 1 build, slice 2 build, one guard fix-it. No summarize.
+	if len(prompts) != 3 {
+		t.Fatalf("want 3 sessions (build, build, fix-it), got %d", len(prompts))
+	}
+	if !strings.Contains(prompts[2], "Slice boundary guard") {
+		t.Errorf("session 3 is not the guard's fix-it session:\n%s", prompts[2])
+	}
+
+	originLog := liveGit(t, origin, "log", liveBranch, "--format=%s")
+	if !strings.Contains(originLog, "minion:slice 1/2") {
+		t.Errorf("completed slice 1 not pushed on origin:\n%s", originLog)
+	}
+	if strings.Contains(originLog, "minion:slice 2/2") {
+		t.Errorf("failed slice 2 has a completion marker on origin:\n%s", originLog)
+	}
+	if prCalled != 0 {
+		t.Errorf("PR creation called %d times on a failed run; want 0", prCalled)
+	}
+	if len(posts) != 1 || !strings.Contains(posts[0], "slice 2/2") {
+		t.Errorf("issue comments = %q; want exactly one naming slice 2/2", posts)
+	}
+}
+
+// guardCheckout builds one repository checkout with an origin: main holds a
+// README, the run's branch holds slice 1's Go file behind its marker, and
+// disk holds slice 2's uncommitted state. It returns the checkout path.
+func guardCheckout(t *testing.T, name, sliceOneSrc string, disk map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	origin := filepath.Join(root, name+".git")
+	dir := filepath.Join(root, name)
+	liveGit(t, root, "init", "--bare", "-b", "main", origin)
+	liveGit(t, root, "clone", "-q", origin, dir)
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	liveGit(t, dir, "add", "-A")
+	liveGit(t, dir, "commit", "-q", "-m", "initial")
+	liveGit(t, dir, "push", "-q", "origin", "main")
+	liveGit(t, dir, "checkout", "-q", "-b", liveBranch)
+	if sliceOneSrc != "" {
+		writeBuilt(t, dir, "slice1.go", sliceOneSrc)
+	}
+	liveGit(t, dir, "add", "-A")
+	liveGit(t, dir, "commit", "-q", "--allow-empty", "-m", "slice 1 work")
+	liveGit(t, dir, "commit", "-q", "--allow-empty", "-m", slices.MarkerSubject(1, 2))
+	for rel, src := range disk {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// TestAbandonedContributions covers the guard's per-checkout loop: every
+// worktree of a multi-repo build is scanned and its findings carry the
+// repository prefix, a checkout the guard cannot analyze yields nothing, and
+// slice one is never checked.
+func TestAbandonedContributions(t *testing.T) {
+	const decl = "package built\n\nfunc Slice1() {}\n"
+	duplicate := map[string]string{"built/slice2.go": "package built\n\nfunc Slice2() {}\n"}
+	consumer := map[string]string{"built/slice2.go": "package built\n\nfunc Slice2() { Slice1() }\n"}
+
+	t.Run("every worktree of a multi-repo build is scanned", func(t *testing.T) {
+		api := guardCheckout(t, "api", decl, duplicate)
+		web := guardCheckout(t, "web", decl, duplicate)
+		got := abandonedContributions([]string{api, web}, []string{"api", "web"}, liveBranch, 2)
+		want := []sliceguard.Contribution{
+			{Identifier: "Slice1", File: "api/built/slice1.go", Slice: 1},
+			{Identifier: "Slice1", File: "web/built/slice1.go", Slice: 1},
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("abandonedContributions = %+v; want %+v", got, want)
+		}
+	})
+	t.Run("a consuming worktree beside an abandoning one", func(t *testing.T) {
+		api := guardCheckout(t, "api", decl, consumer)
+		web := guardCheckout(t, "web", decl, duplicate)
+		got := abandonedContributions([]string{api, web}, []string{"api", "web"}, liveBranch, 2)
+		want := []sliceguard.Contribution{{Identifier: "Slice1", File: "web/built/slice1.go", Slice: 1}}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("abandonedContributions = %+v; want %+v", got, want)
+		}
+	})
+	t.Run("a single-repo build carries no prefix", func(t *testing.T) {
+		api := guardCheckout(t, "api", decl, duplicate)
+		got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, 2)
+		want := []sliceguard.Contribution{{Identifier: "Slice1", File: "built/slice1.go", Slice: 1}}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("abandonedContributions = %+v; want %+v", got, want)
+		}
+	})
+	t.Run("a repository the guard cannot analyze yields nothing", func(t *testing.T) {
+		// Slice 1 wrote no Go, and slice 2 wrote a file that does not parse.
+		api := guardCheckout(t, "api", "", map[string]string{"built/slice2.go": "package built\n\nfunc (\n"})
+		if got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, 2); len(got) != 0 {
+			t.Errorf("abandonedContributions = %+v; want none", got)
+		}
+		// Slice 1's Go file does not parse either.
+		broken := guardCheckout(t, "api", "package built\n\nfunc (\n", duplicate)
+		if got := abandonedContributions([]string{broken}, []string{"api"}, liveBranch, 2); len(got) != 0 {
+			t.Errorf("abandonedContributions = %+v; want none", got)
+		}
+	})
+	t.Run("a checkout without an origin yields nothing", func(t *testing.T) {
+		dir := t.TempDir()
+		liveGit(t, dir, "init", "-q", "-b", "main")
+		if got := abandonedContributions([]string{dir}, []string{"api"}, liveBranch, 2); len(got) != 0 {
+			t.Errorf("abandonedContributions = %+v; want none", got)
+		}
+	})
+	t.Run("slice one is never checked", func(t *testing.T) {
+		api := guardCheckout(t, "api", decl, duplicate)
+		if got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, 1); len(got) != 0 {
+			t.Errorf("abandonedContributions = %+v; want none for slice one", got)
+		}
+	})
+}
+
+// setupMultiRepoWorkspace builds a workspace with two cloned repositories,
+// api and web, each with its own bare origin holding one commit on main. It
+// returns the workspace root and the origin of each repository by name.
+func setupMultiRepoWorkspace(t *testing.T) (workspaceRoot string, origins map[string]string) {
+	t.Helper()
+	root := t.TempDir()
+	workspaceRoot = filepath.Join(root, "ws")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origins = map[string]string{}
+	for _, name := range []string{"api", "web"} {
+		origin := filepath.Join(root, name+".git")
+		dir := filepath.Join(workspaceRoot, name)
+		liveGit(t, root, "init", "--bare", "-b", "main", origin)
+		liveGit(t, root, "clone", "-q", origin, dir)
+		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		liveGit(t, dir, "add", "-A")
+		liveGit(t, dir, "commit", "-q", "-m", "initial")
+		liveGit(t, dir, "push", "-q", "origin", "main")
+		origins[name] = origin
+	}
+	return workspaceRoot, origins
+}
+
+// TestRun_SliceLoop_GuardRunsForEveryWorktree drives the guard through the
+// live loop of a two-repo build: slice 2 calls slice 1's code in api but
+// rebuilds it in web, so the fix-it prompt names web's declaration only, with
+// its repository prefix, and the repaired run reaches the PR.
+func TestRun_SliceLoop_GuardRunsForEveryWorktree(t *testing.T) {
+	ws, origins := setupMultiRepoWorkspace(t)
+	stubSeams(t)
+
+	var prompts []string
+	claudeRun = func(_ gocontext.Context, o claude.Opts) (*claude.Result, error) {
+		prompts = append(prompts, o.Prompt)
+		switch {
+		case strings.Contains(o.Prompt, "Build only this slice: Slice 1"):
+			for _, repo := range []string{"api", "web"} {
+				writeBuilt(t, filepath.Join(o.CWD, repo), "slice1.go", "package built\n\nfunc Slice1() {}\n")
+			}
+		case strings.Contains(o.Prompt, "Build only this slice: Slice 2"):
+			writeBuilt(t, filepath.Join(o.CWD, "api"), "slice2.go", "package built\n\nfunc Slice2() { Slice1() }\n")
+			writeBuilt(t, filepath.Join(o.CWD, "web"), "slice2.go", "package built\n\nfunc Slice2() { again() }\n\nfunc again() {}\n")
+		case strings.Contains(o.Prompt, "Slice boundary guard"):
+			writeBuilt(t, filepath.Join(o.CWD, "web"), "slice2.go", "package built\n\nfunc Slice2() { Slice1() }\n")
+		default:
+			return &claude.Result{ResultText: "TITLE: t\n\nDESCRIPTION:\nd"}, nil
+		}
+		return &claude.Result{}, nil
+	}
+	checksRun = func(string) (string, error) { return "", nil }
+	prCalled := 0
+	prCreateAndLinkAll = func(string, string, string, string, string, string, []string, pr.FullNameFunc, string, *pr.CreateOpts) ([]string, error) {
+		prCalled++
+		return []string{"https://github.com/acme/api/pull/7", "https://github.com/acme/web/pull/8"}, nil
+	}
+
+	prog := slicedProgram()
+	prog.TargetRepos = []string{"api", "web"}
+	opts := liveSliceOpts(ws)
+	opts.Program = prog
+	opts.Project = &project.Project{
+		Principal: project.RepoRef{Name: "api", FullName: "acme/api"},
+		Repos: []project.RepoEntry{
+			{Name: "api", FullName: "acme/api"},
+			{Name: "web", FullName: "acme/web"},
+		},
+	}
+
+	res, err := Run(gocontext.Background(), opts)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if ar := res.AgentResults[0]; ar.Error != nil {
+		t.Fatalf("agent error: %v", ar.Error)
+	}
+
+	// Session order: slice 1 build, slice 2 build, guard fix-it, summarize.
+	if len(prompts) != 4 {
+		t.Fatalf("want 4 sessions (build, build, fix-it, summarize), got %d", len(prompts))
+	}
+	fix := prompts[2]
+	if !strings.Contains(fix, "web/built/slice1.go") {
+		t.Errorf("fix-it prompt does not name web's abandoned declaration with its repository prefix:\n%s", fix)
+	}
+	if strings.Contains(fix, "api/built/slice1.go") {
+		t.Errorf("fix-it prompt names api's declaration, which slice 2 calls:\n%s", fix)
+	}
+	for name, origin := range origins {
+		originLog := liveGit(t, origin, "log", liveBranch, "--format=%s")
+		for _, marker := range []string{"minion:slice 1/2", "minion:slice 2/2"} {
+			if !strings.Contains(originLog, marker) {
+				t.Errorf("%s origin branch missing marker %q:\n%s", name, marker, originLog)
+			}
+		}
+	}
+	if prCalled != 1 {
+		t.Errorf("PR creation called %d times; want 1", prCalled)
+	}
 }

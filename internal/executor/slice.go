@@ -207,7 +207,7 @@ func runSliceLoop(ctx gocontext.Context, opts Opts, prog *program.Program, agent
 		}
 
 		if agent.Checks {
-			if !runChecksWithRetry(ctx, opts, agent, claudeCWD, tools, sliceVerification(agent, worktreePaths, num, total)) {
+			if !runChecksWithRetry(ctx, opts, agent, claudeCWD, tools, sliceVerification(agent, worktreePaths, worktreeRepos, branchName, num, total)) {
 				postSliceFailureComment(opts, num, total, s.Title, branchName)
 				return fail(fmt.Errorf("slice %d/%d: checks failed after retry", num, total))
 			}
@@ -407,12 +407,28 @@ func alreadyBuiltSection(built []sliceguard.Contribution) string {
 }
 
 // earlierContributions reports what the slices before num added, across the
-// given repository checkouts, for the prompt of slice num. Slice one has no
-// earlier slice and gets nothing. A repository whose base or branch cannot
-// be read yields nothing for that repository: the analysis never stops a
-// run. With more than one repository, each file is prefixed by its
-// repository name, matching the layout of the session's working directory.
+// given repository checkouts, for the prompt of slice num.
 func earlierContributions(dirs, repos []string, branchName string, num int) []sliceguard.Contribution {
+	return collectContributions(dirs, repos, branchName, num, func(_ string, built []sliceguard.Contribution) []sliceguard.Contribution {
+		return built
+	})
+}
+
+// abandonedContributions reports which of the earlier slices' contributions
+// nothing in the working tree of each checkout references any more, for the
+// boundary guard of slice num.
+func abandonedContributions(dirs, repos []string, branchName string, num int) []sliceguard.Contribution {
+	return collectContributions(dirs, repos, branchName, num, sliceguard.Abandoned)
+}
+
+// collectContributions reads the contributions of the slices before num in
+// each repository checkout, passes each checkout's list through pick with
+// the checkout's path, and joins the results. Slice one has no earlier slice
+// and gets nothing. A repository whose base or branch cannot be read yields
+// nothing for that repository: the analysis never stops a run. With more
+// than one repository, each file is prefixed by its repository name,
+// matching the layout of the session's working directory.
+func collectContributions(dirs, repos []string, branchName string, num int, pick func(dir string, built []sliceguard.Contribution) []sliceguard.Contribution) []sliceguard.Contribution {
 	if num <= 1 {
 		return nil
 	}
@@ -428,7 +444,7 @@ func earlierContributions(dirs, repos []string, branchName string, num int) []sl
 			slog.Warn("slice contributions: cannot read the branch, skipping", "repo", repos[i], "err", err)
 			continue
 		}
-		for _, c := range built {
+		for _, c := range pick(dir, built) {
 			if len(repos) > 1 {
 				c.File = repos[i] + "/" + c.File
 			}

@@ -50,28 +50,28 @@ PRD stories 2, 3, 4, 5, 6, 7, 8, 10, 13, 14, 15, 16, 17, 19, 25, 27.
 
 ## Acceptance criteria
 
-- [ ] `internal/sliceguard` reports a finding when an earlier slice's
+- [x] `internal/sliceguard` reports a finding when an earlier slice's
       contribution has no remaining reference in the working tree.
-- [ ] References are judged against the files on disk, so a duplicate
+- [x] References are judged against the files on disk, so a duplicate
       written but not yet committed is seen.
-- [ ] A declaration referenced only by its own test counts as abandoned.
-- [ ] The guard runs through the verification value from issue 01, so a
+- [x] A declaration referenced only by its own test counts as abandoned.
+- [x] The guard runs through the verification value from issue 01, so a
       finding fails the slice's checks on the existing path.
-- [ ] The failure text names the identifier, its file, the slice that
+- [x] The failure text names the identifier, its file, the slice that
       added it, and states that the repair is to call the earlier code
       and drop the duplicate.
-- [ ] A finding triggers exactly one fix session, then one
+- [x] A finding triggers exactly one fix session, then one
       re-verification, matching the existing retry contract.
-- [ ] When the fix session repairs the tree, the run continues and
+- [x] When the fix session repairs the tree, the run continues and
       reaches pull request creation.
-- [ ] When the fix session does not repair the tree, the slice fails,
+- [x] When the fix session does not repair the tree, the slice fails,
       the run stops there, and the earlier slices stay pushed.
-- [ ] A successful repair adds no pull request line and no issue
+- [x] A successful repair adds no pull request line and no issue
       comment.
-- [ ] The guard runs for every worktree in a multi-repo build.
-- [ ] A repository whose language the guard cannot analyze yields no
+- [x] The guard runs for every worktree in a multi-repo build.
+- [x] A repository whose language the guard cannot analyze yields no
       findings and never fails a slice.
-- [ ] Slice one is never failed by the guard, and a run that trips
+- [x] Slice one is never failed by the guard, and a run that trips
       nothing behaves exactly as it does today.
 
 ## Modules touched

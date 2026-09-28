@@ -109,9 +109,25 @@ func partition(commits []git.Commit, start string) []span {
 
 // isSource reports whether file is a Go source file that can carry a
 // contribution. Test files cannot: a declaration only a test uses is what
-// the guard exists to catch, so a test file declares nothing for it.
+// the guard exists to catch, so a test file declares nothing for it. Neither
+// can a file under a directory the reference scan skips, such as testdata or
+// vendor: nothing can reference it, so it must never be reported.
 func isSource(file string) bool {
-	return strings.HasSuffix(file, ".go") && !strings.HasSuffix(file, "_test.go")
+	if !strings.HasSuffix(file, ".go") || strings.HasSuffix(file, "_test.go") {
+		return false
+	}
+	for _, seg := range strings.Split(path.Dir(file), "/") {
+		if seg != "." && skipDir(seg) {
+			return false
+		}
+	}
+	return true
+}
+
+// skipDir reports whether a directory holds no Go source the guard reads:
+// hidden directories such as .git, vendored code and test fixtures.
+func skipDir(name string) bool {
+	return strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata"
 }
 
 // packageDeclarations returns the set of package-level identifiers that the

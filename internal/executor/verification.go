@@ -2,9 +2,11 @@ package executor
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/partio-io/minions/internal/program"
+	"github.com/partio-io/minions/internal/sliceguard"
 )
 
 // verifier reports whether the work an agent produced is acceptable. When it
@@ -57,13 +59,36 @@ func agentVerification(agent *program.AgentDef, worktreePaths []string) verifica
 }
 
 // sliceVerification verifies one slice's worktrees with the deterministic
-// checks, and labels the run with the slice being built.
-func sliceVerification(agent *program.AgentDef, worktreePaths []string, num, total int) verification {
+// checks and the slice boundary guard, and labels the run with the slice
+// being built. worktreeRepos names the repository of each worktree, and
+// branchName is the run's branch, which the guard reads for the earlier
+// slices' work.
+func sliceVerification(agent *program.AgentDef, worktreePaths, worktreeRepos []string, branchName string, num, total int) verification {
 	return verification{
 		scope:     fmt.Sprintf("slice %d/%d", num, total),
 		debugBase: fmt.Sprintf("agent-%s-slice-%d", agent.Name, num),
 		logAttrs:  []any{"agent", agent.Name, "slice", num},
-		verifiers: []verifier{checksVerifier(worktreePaths)},
+		verifiers: []verifier{
+			checksVerifier(worktreePaths),
+			guardVerifier(worktreePaths, worktreeRepos, branchName, num),
+		},
+	}
+}
+
+// guardVerifier runs the slice boundary guard over the worktrees: it fails
+// when an earlier slice's contribution has no reference left in the working
+// tree, and its failure text is what scopes the fix session. Slice one has
+// no earlier slice and always passes.
+func guardVerifier(worktreePaths, worktreeRepos []string, branchName string, num int) verifier {
+	return func() (bool, string) {
+		abandoned := abandonedContributions(worktreePaths, worktreeRepos, branchName, num)
+		if len(abandoned) == 0 {
+			return true, ""
+		}
+		for _, c := range abandoned {
+			slog.Warn("slice boundary guard: earlier contribution abandoned", "identifier", c.Identifier, "file", c.File, "added_by_slice", c.Slice, "slice", num)
+		}
+		return false, sliceguard.FailureText(abandoned)
 	}
 }
 
