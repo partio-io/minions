@@ -1094,7 +1094,7 @@ func TestAbandonedContributions(t *testing.T) {
 	t.Run("every worktree of a multi-repo build is scanned", func(t *testing.T) {
 		api := guardCheckout(t, "api", decl, duplicate)
 		web := guardCheckout(t, "web", decl, duplicate)
-		got := abandonedContributions([]string{api, web}, []string{"api", "web"}, liveBranch, 2)
+		got := abandonedContributions([]string{api, web}, []string{"api", "web"}, liveBranch, nil, 2)
 		want := []sliceguard.Contribution{
 			{Identifier: "Slice1", File: "api/built/slice1.go", Slice: 1},
 			{Identifier: "Slice1", File: "web/built/slice1.go", Slice: 1},
@@ -1106,7 +1106,7 @@ func TestAbandonedContributions(t *testing.T) {
 	t.Run("a consuming worktree beside an abandoning one", func(t *testing.T) {
 		api := guardCheckout(t, "api", decl, consumer)
 		web := guardCheckout(t, "web", decl, duplicate)
-		got := abandonedContributions([]string{api, web}, []string{"api", "web"}, liveBranch, 2)
+		got := abandonedContributions([]string{api, web}, []string{"api", "web"}, liveBranch, nil, 2)
 		want := []sliceguard.Contribution{{Identifier: "Slice1", File: "web/built/slice1.go", Slice: 1}}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Errorf("abandonedContributions = %+v; want %+v", got, want)
@@ -1114,7 +1114,7 @@ func TestAbandonedContributions(t *testing.T) {
 	})
 	t.Run("a single-repo build carries no prefix", func(t *testing.T) {
 		api := guardCheckout(t, "api", decl, duplicate)
-		got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, 2)
+		got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, nil, 2)
 		want := []sliceguard.Contribution{{Identifier: "Slice1", File: "built/slice1.go", Slice: 1}}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Errorf("abandonedContributions = %+v; want %+v", got, want)
@@ -1123,26 +1123,77 @@ func TestAbandonedContributions(t *testing.T) {
 	t.Run("a repository the guard cannot analyze yields nothing", func(t *testing.T) {
 		// Slice 1 wrote no Go, and slice 2 wrote a file that does not parse.
 		api := guardCheckout(t, "api", "", map[string]string{"built/slice2.go": "package built\n\nfunc (\n"})
-		if got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, 2); len(got) != 0 {
+		if got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, nil, 2); len(got) != 0 {
 			t.Errorf("abandonedContributions = %+v; want none", got)
 		}
 		// Slice 1's Go file does not parse either.
 		broken := guardCheckout(t, "api", "package built\n\nfunc (\n", duplicate)
-		if got := abandonedContributions([]string{broken}, []string{"api"}, liveBranch, 2); len(got) != 0 {
+		if got := abandonedContributions([]string{broken}, []string{"api"}, liveBranch, nil, 2); len(got) != 0 {
 			t.Errorf("abandonedContributions = %+v; want none", got)
 		}
 	})
 	t.Run("a checkout without an origin yields nothing", func(t *testing.T) {
 		dir := t.TempDir()
 		liveGit(t, dir, "init", "-q", "-b", "main")
-		if got := abandonedContributions([]string{dir}, []string{"api"}, liveBranch, 2); len(got) != 0 {
+		if got := abandonedContributions([]string{dir}, []string{"api"}, liveBranch, nil, 2); len(got) != 0 {
 			t.Errorf("abandonedContributions = %+v; want none", got)
 		}
 	})
 	t.Run("slice one is never checked", func(t *testing.T) {
 		api := guardCheckout(t, "api", decl, duplicate)
-		if got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, 1); len(got) != 0 {
+		if got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, nil, 1); len(got) != 0 {
 			t.Errorf("abandonedContributions = %+v; want none for slice one", got)
+		}
+	})
+}
+
+// TestGuardVerifier_ExemptsLaterConsumer proves the exemption through the
+// verifier the slice loop runs: slice 1 added Slice1, slice 2 left it
+// unreferenced, and the plan's slice 3 names it, so the guard passes and no
+// fix session starts. The same tree under a plan whose later slices do not
+// name it fails with the finding.
+func TestGuardVerifier_ExemptsLaterConsumer(t *testing.T) {
+	const decl = "package built\n\nfunc Slice1() {}\n"
+	duplicate := map[string]string{"built/slice2.go": "package built\n\nfunc Slice2() {}\n"}
+	const planBody = `<!-- minion:research-slices -->
+
+### Slice 1 — Primitive
+
+#### Acceptance criteria
+
+- Slice1 exists
+
+### Slice 2 — Other work
+
+#### Acceptance criteria
+
+- Slice2 exists
+
+### Slice 3 — %s
+
+#### Acceptance criteria
+
+- The consumer is wired
+`
+	parse := func(sliceThree string) *slices.Plan {
+		plan, err := slices.Parse(fmt.Sprintf(planBody, sliceThree))
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		return plan
+	}
+	t.Run("a later slice names it: the verifier passes", func(t *testing.T) {
+		api := guardCheckout(t, "api", decl, duplicate)
+		pass, out := guardVerifier([]string{api}, []string{"api"}, liveBranch, parse("Call Slice1 from Slice2"), 2)()
+		if !pass || out != "" {
+			t.Errorf("guardVerifier = (%v, %q); want (true, \"\")", pass, out)
+		}
+	})
+	t.Run("no later slice names it: the verifier fails", func(t *testing.T) {
+		api := guardCheckout(t, "api", decl, duplicate)
+		pass, out := guardVerifier([]string{api}, []string{"api"}, liveBranch, parse("Unrelated work"), 2)()
+		if pass || !strings.Contains(out, "`Slice1`") {
+			t.Errorf("guardVerifier = (%v, %q); want a failure naming Slice1", pass, out)
 		}
 	})
 }

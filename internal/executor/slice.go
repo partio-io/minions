@@ -207,7 +207,7 @@ func runSliceLoop(ctx gocontext.Context, opts Opts, prog *program.Program, agent
 		}
 
 		if agent.Checks {
-			if !runChecksWithRetry(ctx, opts, agent, claudeCWD, tools, sliceVerification(agent, worktreePaths, worktreeRepos, branchName, num, total)) {
+			if !runChecksWithRetry(ctx, opts, agent, claudeCWD, tools, sliceVerification(agent, worktreePaths, worktreeRepos, branchName, plan, num, total)) {
 				postSliceFailureComment(opts, num, total, s.Title, branchName)
 				return fail(fmt.Errorf("slice %d/%d: checks failed after retry", num, total))
 			}
@@ -416,9 +416,12 @@ func earlierContributions(dirs, repos []string, branchName string, num int) []sl
 
 // abandonedContributions reports which of the earlier slices' contributions
 // nothing in the working tree of each checkout references any more, for the
-// boundary guard of slice num.
-func abandonedContributions(dirs, repos []string, branchName string, num int) []sliceguard.Contribution {
-	return collectContributions(dirs, repos, branchName, num, sliceguard.Abandoned)
+// boundary guard of slice num of plan. A contribution a later slice of plan
+// names is not reported.
+func abandonedContributions(dirs, repos []string, branchName string, plan *slices.Plan, num int) []sliceguard.Contribution {
+	return collectContributions(dirs, repos, branchName, num, func(dir string, built []sliceguard.Contribution) []sliceguard.Contribution {
+		return sliceguard.Abandoned(dir, built, plan, num)
+	})
 }
 
 // collectContributions reads the contributions of the slices before num in

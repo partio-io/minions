@@ -7,6 +7,7 @@ import (
 
 	"github.com/partio-io/minions/internal/program"
 	"github.com/partio-io/minions/internal/sliceguard"
+	"github.com/partio-io/minions/internal/slices"
 )
 
 // verifier reports whether the work an agent produced is acceptable. When it
@@ -60,17 +61,18 @@ func agentVerification(agent *program.AgentDef, worktreePaths []string) verifica
 
 // sliceVerification verifies one slice's worktrees with the deterministic
 // checks and the slice boundary guard, and labels the run with the slice
-// being built. worktreeRepos names the repository of each worktree, and
+// being built. worktreeRepos names the repository of each worktree,
 // branchName is the run's branch, which the guard reads for the earlier
-// slices' work.
-func sliceVerification(agent *program.AgentDef, worktreePaths, worktreeRepos []string, branchName string, num, total int) verification {
+// slices' work, and plan is the slice plan, which the guard asks about the
+// later slices.
+func sliceVerification(agent *program.AgentDef, worktreePaths, worktreeRepos []string, branchName string, plan *slices.Plan, num, total int) verification {
 	return verification{
 		scope:     fmt.Sprintf("slice %d/%d", num, total),
 		debugBase: fmt.Sprintf("agent-%s-slice-%d", agent.Name, num),
 		logAttrs:  []any{"agent", agent.Name, "slice", num},
 		verifiers: []verifier{
 			checksVerifier(worktreePaths),
-			guardVerifier(worktreePaths, worktreeRepos, branchName, num),
+			guardVerifier(worktreePaths, worktreeRepos, branchName, plan, num),
 		},
 	}
 }
@@ -78,10 +80,11 @@ func sliceVerification(agent *program.AgentDef, worktreePaths, worktreeRepos []s
 // guardVerifier runs the slice boundary guard over the worktrees: it fails
 // when an earlier slice's contribution has no reference left in the working
 // tree, and its failure text is what scopes the fix session. Slice one has
-// no earlier slice and always passes.
-func guardVerifier(worktreePaths, worktreeRepos []string, branchName string, num int) verifier {
+// no earlier slice and always passes. A contribution a later slice of plan
+// names is not abandoned yet, and does not fail the run.
+func guardVerifier(worktreePaths, worktreeRepos []string, branchName string, plan *slices.Plan, num int) verifier {
 	return func() (bool, string) {
-		abandoned := abandonedContributions(worktreePaths, worktreeRepos, branchName, num)
+		abandoned := abandonedContributions(worktreePaths, worktreeRepos, branchName, plan, num)
 		if len(abandoned) == 0 {
 			return true, ""
 		}

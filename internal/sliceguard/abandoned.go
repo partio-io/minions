@@ -14,11 +14,20 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/partio-io/minions/internal/slices"
 )
 
 // Abandoned reports the contributions that no Go source file in the working
-// tree at dir references any more. The scan reads the files on disk, not a
-// commit, so a duplicate a session wrote but did not commit is seen.
+// tree at dir references any more, at the end of slice num of plan. The scan
+// reads the files on disk, not a commit, so a duplicate a session wrote but
+// did not commit is seen.
+//
+// A contribution that a slice after num names in the plan is exempt: that
+// later slice is the one that will use it, so it is not abandoned yet. The
+// exemption lifts once no later slice names it, so the last slice still
+// catches a contribution nothing consumed. The guard asks the plan whether a
+// later slice names the identifier; it does not read the plan text itself.
 //
 // A reference is a use of the identifier outside its own declaration: in the
 // declaring package, a plain identifier; from another package, a selector on
@@ -36,7 +45,7 @@ import (
 // reports nothing at all: the build check fails on that file and tells the
 // fix session what to repair, and a finding here would send it after a
 // duplicate that may not exist. The guard errs toward silence.
-func Abandoned(dir string, built []Contribution) []Contribution {
+func Abandoned(dir string, built []Contribution, plan *slices.Plan, num int) []Contribution {
 	if len(built) == 0 {
 		return nil
 	}
@@ -48,6 +57,9 @@ func Abandoned(dir string, built []Contribution) []Contribution {
 	for _, c := range built {
 		pkgDir := path.Dir(c.File)
 		if c.Identifier == "main" && refs.mainPkgs[pkgDir] {
+			continue
+		}
+		if plan.NamedAfter(num, c.Identifier) {
 			continue
 		}
 		if !refs.uses(pkgDir, c.Identifier) {
@@ -130,6 +142,9 @@ func scanReferences(dir string) references {
 	var files []parsedFile
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			// A directory the walk cannot read hides its references.
+			slog.Debug("sliceguard: cannot walk path", "path", p, "err", err)
+			refs.partial = true
 			return nil
 		}
 		if d.IsDir() {
@@ -165,7 +180,12 @@ func scanReferences(dir string) references {
 			return nil
 		}
 		pkgDir := path.Dir(rel)
-		refs.pkgNames[pkgDir] = f.Name.Name
+		// A directory may also hold a build-ignored package main file, such
+		// as a generator. The importable package is the other one, so main
+		// names the directory only when no other package clause is seen.
+		if name, ok := refs.pkgNames[pkgDir]; !ok || name == "main" {
+			refs.pkgNames[pkgDir] = f.Name.Name
+		}
 		files = append(files, parsedFile{file: f, pkgDir: pkgDir})
 		return nil
 	})

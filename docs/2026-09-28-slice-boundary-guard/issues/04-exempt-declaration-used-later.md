@@ -35,19 +35,19 @@ PRD story 12.
 
 ## Acceptance criteria
 
-- [ ] `internal/slices` answers whether any slice after a given number
+- [x] `internal/slices` answers whether any slice after a given number
       names a given identifier in its plan text.
-- [ ] The guard treats a contribution as exempt while such a later slice
+- [x] The guard treats a contribution as exempt while such a later slice
       exists, and reports no finding for it.
-- [ ] The exemption lifts on the last slice, so a contribution no
+- [x] The exemption lifts on the last slice, so a contribution no
       remaining slice consumes is still reported.
-- [ ] A plan of the shape "slice 1 adds a primitive, slice 3 consumes
+- [x] A plan of the shape "slice 1 adds a primitive, slice 3 consumes
       it" passes the guard on slice 2 without a fix session.
-- [ ] The same plan still reports a finding when slice 3 finishes
+- [x] The same plan still reports a finding when slice 3 finishes
       without consuming the primitive.
-- [ ] An identifier that appears only in an earlier slice's text, or
+- [x] An identifier that appears only in an earlier slice's text, or
       only in the current slice's text, grants no exemption.
-- [ ] The guard does not parse plan text itself; it asks the slices
+- [x] The guard does not parse plan text itself; it asks the slices
       package.
 
 ## Modules touched

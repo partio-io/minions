@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/partio-io/minions/internal/slices"
 )
 
 // writeDisk writes files into the working tree of repo without committing
@@ -22,15 +24,15 @@ func writeDisk(t *testing.T, repo string, files map[string]string) {
 	}
 }
 
-// assertAbandoned runs the scan on repo for the contributions before num and
-// compares the findings.
-func assertAbandoned(t *testing.T, repo string, num int, want []Contribution) {
+// assertAbandoned runs the scan on repo for the contributions before num,
+// under plan, and compares the findings. A nil plan exempts nothing.
+func assertAbandoned(t *testing.T, repo string, plan *slices.Plan, num int, want []Contribution) {
 	t.Helper()
 	built, err := Contributions(repo, "main", "minion/task-1", num)
 	if err != nil {
 		t.Fatalf("Contributions: %v", err)
 	}
-	got := Abandoned(repo, built)
+	got := Abandoned(repo, built, plan, num)
 	if len(got) != len(want) {
 		t.Fatalf("Abandoned = %+v; want %+v", got, want)
 	}
@@ -62,14 +64,14 @@ func TestAbandoned_TracerBullet(t *testing.T) {
 			"report/parse.go": "package report\n\nfunc Parse() {}\n",
 			"cmd/main.go":     "package main\n\nimport \"example.com/x/report\"\n\nfunc main() { report.Parse() }\n",
 		})
-		assertAbandoned(t, repo, 2, []Contribution{{Identifier: "ParseReport", File: "report/report.go", Slice: 1}})
+		assertAbandoned(t, repo, nil, 2, []Contribution{{Identifier: "ParseReport", File: "report/report.go", Slice: 1}})
 	})
 	t.Run("earlier code called from another package", func(t *testing.T) {
 		repo := buildRepo(t, map[string]string{"go.mod": goMod}, 2, sliceOne)
 		writeDisk(t, repo, map[string]string{
 			"cmd/main.go": "package main\n\nimport \"example.com/x/report\"\n\nfunc main() { report.ParseReport() }\n",
 		})
-		assertAbandoned(t, repo, 2, nil)
+		assertAbandoned(t, repo, nil, 2, nil)
 	})
 }
 
@@ -203,6 +205,21 @@ func TestAbandoned(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "a package directory that also holds an ignored main file",
+			base: map[string]string{"go.mod": goMod},
+			steps: []step{
+				{files: map[string]string{
+					"report/report.go": "package report\n\nfunc ParseReport() {}\n",
+					"report/zgen.go":   "//go:build ignore\n\npackage main\n\nfunc main() {}\n",
+				}},
+				{marker: 1},
+			},
+			disk: map[string]string{
+				"cmd/main.go": "package main\n\nimport \"example.com/x/report\"\n\nfunc main() { report.ParseReport() }\n",
+			},
+			want: nil,
+		},
+		{
 			name: "referenced through a dot import",
 			base: map[string]string{"go.mod": goMod},
 			steps: []step{
@@ -306,7 +323,7 @@ func TestAbandoned(t *testing.T) {
 			if num == 0 {
 				num = 2
 			}
-			assertAbandoned(t, repo, num, tt.want)
+			assertAbandoned(t, repo, nil, num, tt.want)
 		})
 	}
 }
@@ -331,4 +348,84 @@ func TestFailureText(t *testing.T) {
 	if !strings.HasSuffix(text, "\n") {
 		t.Errorf("FailureText does not end on its own line:\n%q", text)
 	}
+}
+
+// parsePlan parses a plan comment body and fails the test on error.
+func parsePlan(t *testing.T, body string) *slices.Plan {
+	t.Helper()
+	plan, err := slices.Parse(body)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	return plan
+}
+
+// consumerPlan is the plan shape the exemption exists for: slice one adds
+// ParseReport, slice two builds something else, and slice three is the slice
+// that calls ParseReport. Between them, ParseReport is unreferenced.
+const consumerPlan = `<!-- minion:research-slices -->
+
+### Slice 1 — Report parser
+
+Add ParseReport to the report package.
+
+#### Acceptance criteria
+
+- ParseReport parses a report
+
+### Slice 2 — Config loader
+
+Add the config loader.
+
+#### Acceptance criteria
+
+- Config loads
+
+### Slice 3 — Wire the parser
+
+Call ParseReport from the command.
+
+#### Acceptance criteria
+
+- The command calls ParseReport
+`
+
+// TestAbandoned_ExemptWhileLaterSliceNames is the headline case for the
+// exemption: under consumerPlan, slice two leaves ParseReport unreferenced
+// and passes, because slice three names it. Slice three is the last slice
+// that names it, so once slice three finishes without a call, the finding
+// is reported.
+func TestAbandoned_ExemptWhileLaterSliceNames(t *testing.T) {
+	plan := parsePlan(t, consumerPlan)
+	sliceOne := []step{
+		{files: map[string]string{"report/report.go": "package report\n\nfunc ParseReport() {}\n"}},
+		{marker: 1},
+	}
+	t.Run("slice two passes: slice three will consume it", func(t *testing.T) {
+		repo := buildRepo(t, map[string]string{"go.mod": goMod}, 3, sliceOne)
+		writeDisk(t, repo, map[string]string{"config/config.go": "package config\n\nfunc Load() {}\n"})
+		assertAbandoned(t, repo, plan, 2, nil)
+	})
+	t.Run("slice three finishes without consuming it: reported", func(t *testing.T) {
+		steps := append(sliceOne,
+			step{files: map[string]string{"config/config.go": "package config\n\nfunc Load() {}\n"}},
+			step{marker: 2},
+		)
+		repo := buildRepo(t, map[string]string{"go.mod": goMod}, 3, steps)
+		writeDisk(t, repo, map[string]string{
+			"cmd/main.go": "package main\n\nimport \"example.com/x/config\"\n\nfunc main() { config.Load(); parse() }\n\nfunc parse() {}\n",
+		})
+		assertAbandoned(t, repo, plan, 3, []Contribution{{Identifier: "ParseReport", File: "report/report.go", Slice: 1}})
+	})
+	t.Run("named only by earlier and current slices: reported", func(t *testing.T) {
+		plan := parsePlan(t, strings.NewReplacer(
+			"Add the config loader.", "Add the config loader beside ParseReport.",
+			"Wire the parser", "Wire the command",
+			"Call ParseReport from the command.", "Call the parser from the command.",
+			"The command calls ParseReport", "The command parses the report",
+		).Replace(consumerPlan))
+		repo := buildRepo(t, map[string]string{"go.mod": goMod}, 3, sliceOne)
+		writeDisk(t, repo, map[string]string{"config/config.go": "package config\n\nfunc Load() {}\n"})
+		assertAbandoned(t, repo, plan, 2, []Contribution{{Identifier: "ParseReport", File: "report/report.go", Slice: 1}})
+	})
 }
