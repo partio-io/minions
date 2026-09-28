@@ -198,7 +198,7 @@ func runSliceLoop(ctx gocontext.Context, opts Opts, prog *program.Program, agent
 		}
 
 		if agent.Checks {
-			if !runChecksWithRetry(ctx, opts, agent, worktreePaths, claudeCWD, tools, num, total) {
+			if !runChecksWithRetry(ctx, opts, agent, claudeCWD, tools, sliceVerification(agent, worktreePaths, num, total)) {
 				postSliceFailureComment(opts, num, total, s.Title, branchName)
 				return fail(fmt.Errorf("slice %d/%d: checks failed after retry", num, total))
 			}
