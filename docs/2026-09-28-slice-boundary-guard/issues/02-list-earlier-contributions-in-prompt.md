@@ -39,26 +39,26 @@ PRD stories 1, 11, 18, 21, 22, 26.
 
 ## Acceptance criteria
 
-- [ ] The git package can list the commits of a range and the files each
+- [x] The git package can list the commits of a range and the files each
       commit changed, alongside the existing subject-listing helper.
-- [ ] A new `internal/sliceguard` package reports the contributions of
+- [x] A new `internal/sliceguard` package reports the contributions of
       the slices before a given slice number, for a given repository.
-- [ ] A contribution names the declared identifier, the declaring file,
+- [x] A contribution names the declared identifier, the declaring file,
       and the slice number that added it.
-- [ ] Contributions cover package-level functions, types, constants and
+- [x] Contributions cover package-level functions, types, constants and
       variables, whether exported or not.
-- [ ] Slice attribution uses the existing empty marker commits, so slice
+- [x] Slice attribution uses the existing empty marker commits, so slice
       identity keeps one definition in the runtime.
-- [ ] Declarations that the base branch already carried are not reported
+- [x] Declarations that the base branch already carried are not reported
       as any slice's contribution.
-- [ ] The prompt for slice two and later carries an "already built"
+- [x] The prompt for slice two and later carries an "already built"
       section listing those contributions.
-- [ ] The prompt for slice one omits the section entirely.
-- [ ] A repository the analysis cannot parse yields no contributions and
+- [x] The prompt for slice one omits the section entirely.
+- [x] A repository the analysis cannot parse yields no contributions and
       no error that stops the run.
-- [ ] The runtime gains no new module dependency; only the standard
+- [x] The runtime gains no new module dependency; only the standard
       library is used for the parsing.
-- [ ] A dry run prints the per-slice prompts including the new section.
+- [x] A dry run prints the per-slice prompts including the new section.
 
 ## Modules touched
 

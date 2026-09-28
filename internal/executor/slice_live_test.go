@@ -113,6 +113,15 @@ func TestRun_SliceLoop_AdvancesPerSliceAndCreatesPROnlyAfterFinal(t *testing.T) 
 		if err := os.WriteFile(filepath.Join(o.CWD, fmt.Sprintf("slice-%d.txt", n)), []byte("work"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		// One Go declaration per slice, so slice 2's prompt has something
+		// to list under "Already Built".
+		src := fmt.Sprintf("package built\n\nfunc Slice%d() {}\n", n)
+		if err := os.MkdirAll(filepath.Join(o.CWD, "built"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(o.CWD, "built", fmt.Sprintf("slice%d.go", n)), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		work = append(work, workSession{prompt: o.Prompt, branch: branch, sawPrev: statErr == nil})
 		return &claude.Result{}, nil
 	}
@@ -162,6 +171,14 @@ func TestRun_SliceLoop_AdvancesPerSliceAndCreatesPROnlyAfterFinal(t *testing.T) 
 	}
 	if !work[1].sawPrev {
 		t.Errorf("slice 2's worktree lacks slice 1's committed file — slice N+1 does not see slice N's commits")
+	}
+	if strings.Contains(work[0].prompt, "## Already Built") {
+		t.Errorf("session 1 prompt carries an already-built section; slice 1 has no earlier slice")
+	}
+	for _, want := range []string{"## Already Built", "`Slice1`", "built/slice1.go", "(slice 1)"} {
+		if !strings.Contains(work[1].prompt, want) {
+			t.Errorf("session 2 prompt lacks %q in its already-built section", want)
+		}
 	}
 
 	originLog := liveGit(t, origin, "log", liveBranch, "--format=%s")

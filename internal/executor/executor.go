@@ -157,7 +157,7 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 	// whole-issue prompt, which is skipped entirely so it does not
 	// pollute context tracking.
 	if opts.DryRun && plan != nil {
-		printSlicePrompts(opts, prog, agent, plan, pt)
+		printSlicePrompts(opts, prog, agent, plan, taskID, pt)
 		pt.Finish(nil)
 		return AgentResult{AgentName: agent.Name}
 	}

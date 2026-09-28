@@ -12,6 +12,7 @@ import (
 	pcontext "github.com/partio-io/minions/internal/context"
 	"github.com/partio-io/minions/internal/git"
 	"github.com/partio-io/minions/internal/program"
+	"github.com/partio-io/minions/internal/sliceguard"
 	"github.com/partio-io/minions/internal/slices"
 	"github.com/partio-io/minions/internal/worktree"
 )
@@ -37,10 +38,17 @@ func resolveSlicePlan(prog *program.Program, comments []slices.Comment) (*slices
 
 // printSlicePrompts renders the dry-run output for a slice-aware program:
 // one full agent prompt per slice instead of a single whole-issue prompt.
-func printSlicePrompts(opts Opts, prog *program.Program, agent *program.AgentDef, plan *slices.Plan, pt *pcontext.PhaseTracker) {
+func printSlicePrompts(opts Opts, prog *program.Program, agent *program.AgentDef, plan *slices.Plan, taskID string, pt *pcontext.PhaseTracker) {
 	prdComment, _ := slices.FindPRDComment(opts.IssueComments)
+	repos := prog.EffectiveTargetRepos(agent)
+	branchName := "minion/" + taskID
+	dirs := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		dirs = append(dirs, filepath.Join(opts.WorkspaceRoot, repo))
+	}
 	for i := range plan.Slices {
-		sliceCtx := buildSliceIssueContext(opts.IssueTitle, opts.IssueBody, prdComment, plan, i)
+		built := earlierContributions(dirs, repos, branchName, i+1)
+		sliceCtx := buildSliceIssueContext(opts.IssueTitle, opts.IssueBody, prdComment, plan, i, built)
 		promptText := buildAgentPrompt(prog, agent, opts.PlanText, sliceCtx, opts.PRContext, opts.WorkspaceRoot, opts.Project, pt)
 		fmt.Printf("\n=== DRY RUN: Agent %s Prompt — Slice %d/%d ===\n", agent.Name, i+1, len(plan.Slices))
 		fmt.Println(promptText)
@@ -157,7 +165,8 @@ func runSliceLoop(ctx gocontext.Context, opts Opts, prog *program.Program, agent
 			defer func() { _ = os.RemoveAll(tmpDir) }()
 		}
 
-		sliceCtx := buildSliceIssueContext(opts.IssueTitle, opts.IssueBody, prdComment, plan, i)
+		built := earlierContributions(worktreePaths, worktreeRepos, branchName, num)
+		sliceCtx := buildSliceIssueContext(opts.IssueTitle, opts.IssueBody, prdComment, plan, i, built)
 		promptText := buildAgentPrompt(prog, agent, opts.PlanText, sliceCtx, opts.PRContext, opts.WorkspaceRoot, opts.Project, pt)
 
 		var logFile string
@@ -359,8 +368,10 @@ func commitSliceWork(wtPath string, num, total int, title string) error {
 // buildSliceIssueContext renders the bounded per-slice issue context that
 // replaces the whole-discussion blob: issue title and body, the PRD comment
 // when present, the full plan for orientation, and the directive naming the
-// one slice to build.
-func buildSliceIssueContext(issueTitle, issueBody, prdComment string, plan *slices.Plan, idx int) string {
+// one slice to build. Slice two and later also get the "already built"
+// section listing the declarations the earlier slices added; slice one has
+// no earlier slice, so its prompt omits the section.
+func buildSliceIssueContext(issueTitle, issueBody, prdComment string, plan *slices.Plan, idx int, built []sliceguard.Contribution) string {
 	s := plan.Slices[idx]
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n%s\n\n", issueTitle, issueBody)
@@ -369,7 +380,60 @@ func buildSliceIssueContext(issueTitle, issueBody, prdComment string, plan *slic
 	}
 	b.WriteString("## Slice Plan\n\nThis issue is built one slice at a time. The full plan, for orientation only:\n\n")
 	b.WriteString(strings.TrimSpace(plan.Raw) + "\n\n")
+	if idx > 0 {
+		b.WriteString(alreadyBuiltSection(built))
+	}
 	fmt.Fprintf(&b, "## Your Slice\n\nBuild only this slice: Slice %d — %s\n\n", s.Number, s.Title)
 	b.WriteString("Implement nothing from any other slice; other slices are built in their own sessions.\n")
 	return b.String()
+}
+
+// alreadyBuiltSection renders the declarations the earlier slices added, one
+// per line, so the session finds them without a search and does not rebuild
+// them.
+func alreadyBuiltSection(built []sliceguard.Contribution) string {
+	var b strings.Builder
+	b.WriteString("## Already Built\n\n")
+	if len(built) == 0 {
+		b.WriteString("No package-level Go declarations from the earlier slices were found on the branch.\n\n")
+		return b.String()
+	}
+	b.WriteString("The earlier slices of this run already added these package-level Go declarations. Use them; do not rebuild them.\n\n")
+	for _, c := range built {
+		fmt.Fprintf(&b, "- `%s` — %s (slice %d)\n", c.Identifier, c.File, c.Slice)
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// earlierContributions reports what the slices before num added, across the
+// given repository checkouts, for the prompt of slice num. Slice one has no
+// earlier slice and gets nothing. A repository whose base or branch cannot
+// be read yields nothing for that repository: the analysis never stops a
+// run. With more than one repository, each file is prefixed by its
+// repository name, matching the layout of the session's working directory.
+func earlierContributions(dirs, repos []string, branchName string, num int) []sliceguard.Contribution {
+	if num <= 1 {
+		return nil
+	}
+	var out []sliceguard.Contribution
+	for i, dir := range dirs {
+		base := git.OriginDefaultBranch(dir)
+		if base == "" {
+			slog.Warn("slice contributions: cannot determine origin's default branch, skipping", "repo", repos[i])
+			continue
+		}
+		built, err := sliceguard.Contributions(dir, "origin/"+base, branchName, num)
+		if err != nil {
+			slog.Warn("slice contributions: cannot read the branch, skipping", "repo", repos[i], "err", err)
+			continue
+		}
+		for _, c := range built {
+			if len(repos) > 1 {
+				c.File = repos[i] + "/" + c.File
+			}
+			out = append(out, c)
+		}
+	}
+	return out
 }
