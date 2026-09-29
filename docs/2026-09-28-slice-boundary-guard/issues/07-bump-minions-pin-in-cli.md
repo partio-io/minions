@@ -3,7 +3,7 @@
 **Source PRD**: [../prd.md](../prd.md)
 **Blocked by**: [06 — Publish the runtime release](./06-publish-runtime-release.md)
 
-**Chosen version**: _(fill in after issue 06's handoff — e.g. `v0.0.14`)_
+**Chosen version**: `v0.0.14`
 
 ## What to build
 
