@@ -69,10 +69,16 @@ func FetchBranch(dir, branch string) error {
 	return err
 }
 
-// ListCommitSubjects returns the commit subjects reachable from ref in dir,
-// newest first.
-func ListCommitSubjects(dir, ref string) ([]string, error) {
-	out, err := ExecGitDir(dir, "log", "--format=%s", ref)
+// ListCommitSubjectsRange returns the subjects of the commits ref has and base
+// does not, in dir, newest first.
+//
+// The range is the point of this helper. Callers count the slice markers a run
+// left on its own branch, and every marker an earlier run merged into base is
+// still reachable from ref. Counting from ref alone therefore grows by six,
+// nine, twelve markers as minion work lands, until the count passes any plan's
+// slice total and every resume fails.
+func ListCommitSubjectsRange(dir, base, ref string) ([]string, error) {
+	out, err := ExecGitDir(dir, "log", "--format=%s", base+".."+ref)
 	if err != nil {
 		return nil, err
 	}
@@ -80,4 +86,91 @@ func ListCommitSubjects(dir, ref string) ([]string, error) {
 		return nil, nil
 	}
 	return strings.Split(out, "\n"), nil
+}
+
+// Commit is one commit of a range: its hash, its subject, and the paths it
+// changed, relative to the repository root. An empty commit changes no path.
+type Commit struct {
+	Hash    string
+	Subject string
+	Files   []string
+}
+
+// commitSep separates the hash from the subject in the log format that
+// ListCommitsRange reads. A subject cannot contain the unit separator.
+const commitSep = "\x1f"
+
+// ListCommitsRange returns the commits ref has and base does not, in dir,
+// newest first, each with the paths it changed. Renames are not detected, so
+// a moved file lists under both its old and its new path. Paths are returned
+// verbatim: git's default quoting of non-ASCII paths is turned off, so a
+// caller can pass each path straight back to git.
+//
+// It is the sibling of ListCommitSubjectsRange for callers that need to know
+// which files each commit of the run's own branch touched.
+func ListCommitsRange(dir, base, ref string) ([]Commit, error) {
+	out, err := ExecGitDir(dir, "-c", "core.quotePath=false", "log", "--format=%H"+commitSep+"%s", "--name-only", "--no-renames", base+".."+ref)
+	if err != nil {
+		return nil, err
+	}
+	var commits []Commit
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		if hash, subject, ok := strings.Cut(line, commitSep); ok {
+			commits = append(commits, Commit{Hash: hash, Subject: subject})
+			continue
+		}
+		if len(commits) == 0 {
+			return nil, fmt.Errorf("git log %s..%s: unexpected line before first commit: %q", base, ref, line)
+		}
+		last := &commits[len(commits)-1]
+		last.Files = append(last.Files, line)
+	}
+	return commits, nil
+}
+
+// MergeBase returns the hash of the best common ancestor of a and b in dir.
+func MergeBase(dir, a, b string) (string, error) {
+	return ExecGitDir(dir, "merge-base", a, b)
+}
+
+// ListTreeFiles returns the paths of the files under path at rev, in dir,
+// relative to the repository root. A path that does not exist at rev yields
+// no files and no error. Paths are returned verbatim, as in ListCommitsRange.
+func ListTreeFiles(dir, rev, path string) ([]string, error) {
+	out, err := ExecGitDir(dir, "-c", "core.quotePath=false", "ls-tree", "--name-only", rev, "--", strings.TrimSuffix(path, "/")+"/")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// OriginDefaultBranch returns the short name of origin's default branch (e.g.
+// "main"), or "" if it cannot be determined. It prefers the locally recorded
+// origin/HEAD symref and falls back to rediscovering it from the remote.
+func OriginDefaultBranch(dir string) string {
+	read := func() string {
+		out, err := ExecGitDir(dir, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+		if err != nil {
+			return ""
+		}
+		return strings.TrimPrefix(strings.TrimSpace(out), "origin/")
+	}
+
+	if b := read(); b != "" {
+		return b
+	}
+	// origin/HEAD is not recorded locally (common on shallow CI clones); ask the
+	// remote to (re)discover it, then re-read.
+	if _, err := ExecGitDir(dir, "remote", "set-head", "origin", "--auto"); err == nil {
+		if b := read(); b != "" {
+			return b
+		}
+	}
+	return ""
 }

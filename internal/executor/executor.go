@@ -157,7 +157,7 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 	// whole-issue prompt, which is skipped entirely so it does not
 	// pollute context tracking.
 	if opts.DryRun && plan != nil {
-		printSlicePrompts(opts, prog, agent, plan, pt)
+		printSlicePrompts(opts, prog, agent, plan, taskID, pt)
 		pt.Finish(nil)
 		return AgentResult{AgentName: agent.Name}
 	}
@@ -326,7 +326,7 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 
 	// Run checks
 	if agent.Checks {
-		if !runChecksWithRetry(ctx, opts, agent, worktreePaths, claudeCWD, tools, 0, 0) {
+		if !runChecksWithRetry(ctx, opts, agent, claudeCWD, tools, agentVerification(agent, worktreePaths)) {
 			slog.Error("checks still failing", "agent", agent.Name)
 			cleanup()
 			return AgentResult{AgentName: agent.Name, Error: fmt.Errorf("checks failed for agent %s", agent.Name)}
@@ -343,26 +343,17 @@ func runAgent(ctx gocontext.Context, opts Opts, prog *program.Program, agent *pr
 	return AgentResult{AgentName: agent.Name, PRURLs: prURLs}
 }
 
-// runChecksWithRetry runs checks on the worktrees and, when they fail and the
+// runChecksWithRetry verifies the work and, when verification fails and the
 // agent allows a retry, runs one fix-it session scoped to the failure output
-// before re-running the checks. sliceNum > 0 labels output and debug
-// artifacts with the slice being built.
-func runChecksWithRetry(ctx gocontext.Context, opts Opts, agent *program.AgentDef, worktreePaths []string, claudeCWD string, tools []string, sliceNum, sliceTotal int) bool {
-	allPass, failedOutput := runChecks(worktreePaths)
+// before it verifies a second time. The verification carries the labels for
+// printed output, logs and debug artifacts.
+func runChecksWithRetry(ctx gocontext.Context, opts Opts, agent *program.AgentDef, claudeCWD string, tools []string, v verification) bool {
+	allPass, failedOutput := v.run()
 	if allPass || !agent.RetryOnFail {
 		return allPass
 	}
 
-	scope := "agent " + agent.Name
-	debugBase := "agent-" + agent.Name
-	logAttrs := []any{"agent", agent.Name}
-	if sliceNum > 0 {
-		scope = fmt.Sprintf("slice %d/%d", sliceNum, sliceTotal)
-		debugBase = fmt.Sprintf("agent-%s-slice-%d", agent.Name, sliceNum)
-		logAttrs = append(logAttrs, "slice", sliceNum)
-	}
-
-	fmt.Printf("--- Checks failed for %s, retrying ---\n", scope)
+	fmt.Printf("--- Checks failed for %s, retrying ---\n", v.scope)
 	retryMaxTurns := agent.RetryMaxTurns
 	if retryMaxTurns == 0 {
 		retryMaxTurns = 15
@@ -372,7 +363,7 @@ func runChecksWithRetry(ctx gocontext.Context, opts Opts, agent *program.AgentDe
 
 	var retryLogFile string
 	if opts.DebugDir != "" {
-		retryLogFile = filepath.Join(opts.DebugDir, debugBase+"-retry-output.json")
+		retryLogFile = filepath.Join(opts.DebugDir, v.debugBase+"-retry-output.json")
 	}
 
 	retryResult, retryErr := claudeRun(ctx, claude.Opts{
@@ -383,12 +374,12 @@ func runChecksWithRetry(ctx gocontext.Context, opts Opts, agent *program.AgentDe
 		LogFile:      retryLogFile,
 	})
 	if retryErr != nil {
-		slog.Error("claude retry failed", append(logAttrs, "error", retryErr)...)
+		slog.Error("claude retry failed", append(v.logAttrs, "error", retryErr)...)
 	} else if retryResult.IsError {
-		slog.Warn("claude retry returned error", append(logAttrs, "subtype", retryResult.Subtype)...)
+		slog.Warn("claude retry returned error", append(v.logAttrs, "subtype", retryResult.Subtype)...)
 	}
 
-	allPass, _ = runChecks(worktreePaths)
+	allPass, _ = v.run()
 	return allPass
 }
 

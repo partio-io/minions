@@ -5,6 +5,7 @@ import (
 	gocontext "context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -212,5 +213,91 @@ func TestRunDryRun_SlicePlan_PrintsPerSlicePrompts(t *testing.T) {
 	}
 	if strings.Contains(blocks[0], directives[1]) {
 		t.Errorf("block 1 carries slice 2's directive — slices not singled out")
+	}
+}
+
+// seedEarlierSlice puts one completed slice on the run's branch in the
+// workspace repo: a Go file declaring ident under dir, its work commit, and
+// the slice marker. The base branch never carries the file.
+func seedEarlierSlice(t *testing.T, ws, dir, ident string) {
+	t.Helper()
+	api := filepath.Join(ws, "api")
+	liveGit(t, api, "checkout", "-q", "-b", liveBranch)
+	if err := os.MkdirAll(filepath.Join(api, dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := "package " + dir + "\n\nfunc " + ident + "() {}\n"
+	if err := os.WriteFile(filepath.Join(api, dir, dir+".go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	liveGit(t, api, "add", "-A")
+	liveGit(t, api, "commit", "-q", "-m", "slice 1/2: Plan parser")
+	liveGit(t, api, "commit", "-q", "--allow-empty", "-m", slices.MarkerSubject(1, 2))
+}
+
+// TestRunDryRun_SlicePlan_ListsEarlierContributions is the tracer bullet for
+// the "already built" section: a dry run against a workspace whose branch
+// already carries slice one names slice one's declaration in slice two's
+// prompt, and slice one's prompt has no such section.
+func TestRunDryRun_SlicePlan_ListsEarlierContributions(t *testing.T) {
+	ws, _ := setupSliceWorkspace(t)
+	seedEarlierSlice(t, ws, "report", "ParseReport")
+
+	prog := slicedProgram()
+	comments := []slices.Comment{
+		{Author: "jcleira", Body: testPRDComment},
+		{Author: "jcleira", Body: testPlanComment},
+	}
+	opts := sliceTestOpts(prog, comments)
+	opts.WorkspaceRoot = ws
+
+	var runErr error
+	out := captureStdout(t, func() {
+		_, runErr = Run(gocontext.Background(), opts)
+	})
+	if runErr != nil {
+		t.Fatalf("Run returned error: %v", runErr)
+	}
+
+	blocks := strings.Split(out, "=== DRY RUN:")[1:]
+	if len(blocks) != 2 {
+		t.Fatalf("want 2 per-slice prompt blocks, got %d\noutput:\n%s", len(blocks), out)
+	}
+	if strings.Contains(blocks[0], "## Already Built") {
+		t.Errorf("slice 1 prompt carries an already-built section:\n%s", blocks[0])
+	}
+	if !strings.Contains(blocks[1], "## Already Built") {
+		t.Fatalf("slice 2 prompt lacks the already-built section:\n%s", blocks[1])
+	}
+	for _, want := range []string{"ParseReport", "report/report.go", "slice 1"} {
+		if !strings.Contains(blocks[1], want) {
+			t.Errorf("slice 2 prompt: missing %q in already-built section:\n%s", want, blocks[1])
+		}
+	}
+}
+
+// TestRunDryRun_SlicePlan_UnreadableRepoDoesNotStopRun: a workspace whose
+// repository cannot be read yields no contributions, and the run goes on.
+// Slice two still gets the section, so the prompt shape does not depend on
+// what the analysis found.
+func TestRunDryRun_SlicePlan_UnreadableRepoDoesNotStopRun(t *testing.T) {
+	comments := []slices.Comment{{Author: "jcleira", Body: testPlanComment}}
+
+	var runErr error
+	out := captureStdout(t, func() {
+		_, runErr = Run(gocontext.Background(), sliceTestOpts(slicedProgram(), comments))
+	})
+	if runErr != nil {
+		t.Fatalf("Run returned error: %v", runErr)
+	}
+	blocks := strings.Split(out, "=== DRY RUN:")[1:]
+	if len(blocks) != 2 {
+		t.Fatalf("want 2 per-slice prompt blocks, got %d\noutput:\n%s", len(blocks), out)
+	}
+	if !strings.Contains(blocks[1], "## Already Built") {
+		t.Errorf("slice 2 prompt lacks the already-built section:\n%s", blocks[1])
+	}
+	if !strings.Contains(blocks[1], "No package-level Go declarations from the earlier slices were found") {
+		t.Errorf("slice 2 prompt does not say that nothing was found:\n%s", blocks[1])
 	}
 }

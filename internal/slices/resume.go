@@ -17,6 +17,13 @@ func MarkerSubject(num, total int) string {
 	return fmt.Sprintf("minion:slice %d/%d", num, total)
 }
 
+// IsMarker reports whether subject is a slice marker commit subject, for any
+// slice number and any slice total. ResumePoint and the slice partition both
+// use it, so the two counts of a branch's markers cannot disagree.
+func IsMarker(subject string) bool {
+	return markerRe.MatchString(subject)
+}
+
 // ResumePoint reports how many slices a branch has already completed, given
 // the branch's commit subjects and the plan's slice count. A run resumes at
 // slice completed+1; completed == total means nothing is left to build. More
@@ -24,7 +31,7 @@ func MarkerSubject(num, total int) string {
 // an error, never a guess.
 func ResumePoint(subjects []string, total int) (completed int, err error) {
 	for _, s := range subjects {
-		if markerRe.MatchString(s) {
+		if IsMarker(s) {
 			completed++
 		}
 	}

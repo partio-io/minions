@@ -12,6 +12,7 @@ import (
 	pcontext "github.com/partio-io/minions/internal/context"
 	"github.com/partio-io/minions/internal/git"
 	"github.com/partio-io/minions/internal/program"
+	"github.com/partio-io/minions/internal/sliceguard"
 	"github.com/partio-io/minions/internal/slices"
 	"github.com/partio-io/minions/internal/worktree"
 )
@@ -37,10 +38,17 @@ func resolveSlicePlan(prog *program.Program, comments []slices.Comment) (*slices
 
 // printSlicePrompts renders the dry-run output for a slice-aware program:
 // one full agent prompt per slice instead of a single whole-issue prompt.
-func printSlicePrompts(opts Opts, prog *program.Program, agent *program.AgentDef, plan *slices.Plan, pt *pcontext.PhaseTracker) {
+func printSlicePrompts(opts Opts, prog *program.Program, agent *program.AgentDef, plan *slices.Plan, taskID string, pt *pcontext.PhaseTracker) {
 	prdComment, _ := slices.FindPRDComment(opts.IssueComments)
+	repos := prog.EffectiveTargetRepos(agent)
+	branchName := "minion/" + taskID
+	dirs := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		dirs = append(dirs, filepath.Join(opts.WorkspaceRoot, repo))
+	}
 	for i := range plan.Slices {
-		sliceCtx := buildSliceIssueContext(opts.IssueTitle, opts.IssueBody, prdComment, plan, i)
+		built := earlierContributions(dirs, repos, branchName, i+1)
+		sliceCtx := buildSliceIssueContext(opts.IssueTitle, opts.IssueBody, prdComment, plan, i, built)
 		promptText := buildAgentPrompt(prog, agent, opts.PlanText, sliceCtx, opts.PRContext, opts.WorkspaceRoot, opts.Project, pt)
 		fmt.Printf("\n=== DRY RUN: Agent %s Prompt — Slice %d/%d ===\n", agent.Name, i+1, len(plan.Slices))
 		fmt.Println(promptText)
@@ -157,7 +165,8 @@ func runSliceLoop(ctx gocontext.Context, opts Opts, prog *program.Program, agent
 			defer func() { _ = os.RemoveAll(tmpDir) }()
 		}
 
-		sliceCtx := buildSliceIssueContext(opts.IssueTitle, opts.IssueBody, prdComment, plan, i)
+		built := earlierContributions(worktreePaths, worktreeRepos, branchName, num)
+		sliceCtx := buildSliceIssueContext(opts.IssueTitle, opts.IssueBody, prdComment, plan, i, built)
 		promptText := buildAgentPrompt(prog, agent, opts.PlanText, sliceCtx, opts.PRContext, opts.WorkspaceRoot, opts.Project, pt)
 
 		var logFile string
@@ -198,7 +207,7 @@ func runSliceLoop(ctx gocontext.Context, opts Opts, prog *program.Program, agent
 		}
 
 		if agent.Checks {
-			if !runChecksWithRetry(ctx, opts, agent, worktreePaths, claudeCWD, tools, num, total) {
+			if !runChecksWithRetry(ctx, opts, agent, claudeCWD, tools, sliceVerification(agent, worktreePaths, worktreeRepos, branchName, plan, num, total)) {
 				postSliceFailureComment(opts, num, total, s.Title, branchName)
 				return fail(fmt.Errorf("slice %d/%d: checks failed after retry", num, total))
 			}
@@ -290,6 +299,11 @@ func ensurePRs(ctx gocontext.Context, opts Opts, prog *program.Program, agent *p
 // whether the branch exists on origin at all. Local-only branch state is
 // never consulted. Repos that disagree with each other are a loud error —
 // resuming from a guess could silently rebuild or skip a slice.
+//
+// Markers are counted over the branch's own commits only, excluding the base
+// branch. Every completed minion run merges its markers into the base, so a
+// count reachable from the branch tip would carry those forward and eventually
+// exceed any plan's slice total.
 func resumeFromOrigin(workspaceRoot string, repos []string, branchName string, total int) (int, bool, error) {
 	completed, onOrigin, seen := 0, false, false
 	for _, repo := range repos {
@@ -306,7 +320,14 @@ func resumeFromOrigin(workspaceRoot string, repos []string, branchName string, t
 			if err := git.FetchBranch(repoPath, branchName); err != nil {
 				return 0, false, fmt.Errorf("fetching %s in %s: %w", branchName, repo, err)
 			}
-			subjects, err := git.ListCommitSubjects(repoPath, "origin/"+branchName)
+			base := git.OriginDefaultBranch(repoPath)
+			if base == "" {
+				return 0, false, fmt.Errorf("determining origin's default branch in %s: cannot count slice markers without a base", repo)
+			}
+			if err := git.FetchBranch(repoPath, base); err != nil {
+				return 0, false, fmt.Errorf("fetching %s in %s: %w", base, repo, err)
+			}
+			subjects, err := git.ListCommitSubjectsRange(repoPath, "origin/"+base, "origin/"+branchName)
 			if err != nil {
 				return 0, false, fmt.Errorf("listing commits of origin/%s in %s: %w", branchName, repo, err)
 			}
@@ -347,8 +368,10 @@ func commitSliceWork(wtPath string, num, total int, title string) error {
 // buildSliceIssueContext renders the bounded per-slice issue context that
 // replaces the whole-discussion blob: issue title and body, the PRD comment
 // when present, the full plan for orientation, and the directive naming the
-// one slice to build.
-func buildSliceIssueContext(issueTitle, issueBody, prdComment string, plan *slices.Plan, idx int) string {
+// one slice to build. Slice two and later also get the "already built"
+// section listing the declarations the earlier slices added; slice one has
+// no earlier slice, so its prompt omits the section.
+func buildSliceIssueContext(issueTitle, issueBody, prdComment string, plan *slices.Plan, idx int, built []sliceguard.Contribution) string {
 	s := plan.Slices[idx]
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n%s\n\n", issueTitle, issueBody)
@@ -357,7 +380,122 @@ func buildSliceIssueContext(issueTitle, issueBody, prdComment string, plan *slic
 	}
 	b.WriteString("## Slice Plan\n\nThis issue is built one slice at a time. The full plan, for orientation only:\n\n")
 	b.WriteString(strings.TrimSpace(plan.Raw) + "\n\n")
+	if idx > 0 {
+		b.WriteString(alreadyBuiltSection(built))
+	}
 	fmt.Fprintf(&b, "## Your Slice\n\nBuild only this slice: Slice %d — %s\n\n", s.Number, s.Title)
 	b.WriteString("Implement nothing from any other slice; other slices are built in their own sessions.\n")
 	return b.String()
+}
+
+// alreadyBuiltSection renders the declarations the earlier slices added, one
+// per line, so the session finds them without a search and does not rebuild
+// them.
+func alreadyBuiltSection(built []sliceguard.Contribution) string {
+	var b strings.Builder
+	b.WriteString("## Already Built\n\n")
+	if len(built) == 0 {
+		b.WriteString("No package-level Go declarations from the earlier slices were found on the branch.\n\n")
+		return b.String()
+	}
+	b.WriteString("The earlier slices of this run already added these package-level Go declarations. Use them; do not rebuild them.\n\n")
+	for _, c := range built {
+		fmt.Fprintf(&b, "- `%s` — %s (slice %d)\n", c.Identifier, c.File, c.Slice)
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// earlierContributions reports what the slices before num added, across the
+// given repository checkouts, for the prompt of slice num.
+func earlierContributions(dirs, repos []string, branchName string, num int) []sliceguard.Contribution {
+	return collectContributions(dirs, repos, branchName, num, func(_ string, built []sliceguard.Contribution) []sliceguard.Contribution {
+		return built
+	})
+}
+
+// abandonedContributions reports which of the earlier slices' contributions
+// nothing in the working tree of each checkout references any more, for the
+// boundary guard of slice num of plan. A contribution a later slice of plan
+// names is not reported.
+func abandonedContributions(dirs, repos []string, branchName string, plan *slices.Plan, num int) []sliceguard.Contribution {
+	return collectContributions(dirs, repos, branchName, num, func(dir string, built []sliceguard.Contribution) []sliceguard.Contribution {
+		return sliceguard.Abandoned(dir, built, plan, num)
+	})
+}
+
+// deletedFiles reports the files the earlier slices added that the working
+// tree of each checkout no longer holds, for the boundary guard of slice
+// num. Files are prefixed by repository name as in collectContributions.
+func deletedFiles(dirs, repos []string, branchName string, num int) []sliceguard.Deletion {
+	if num <= 1 {
+		return nil
+	}
+	var out []sliceguard.Deletion
+	eachCheckoutBranch(dirs, repos, func(i int, dir, base string) error {
+		deleted, err := sliceguard.Deleted(dir, base, branchName, num)
+		if err != nil {
+			return err
+		}
+		for _, d := range deleted {
+			d.File = prefixRepo(repos, i, d.File)
+			out = append(out, d)
+		}
+		return nil
+	})
+	return out
+}
+
+// collectContributions reads the contributions of the slices before num in
+// each repository checkout, passes each checkout's list through pick with
+// the checkout's path, and joins the results. Slice one has no earlier slice
+// and gets nothing. A repository whose base or branch cannot be read yields
+// nothing for that repository: the analysis never stops a run. With more
+// than one repository, each file is prefixed by its repository name,
+// matching the layout of the session's working directory.
+func collectContributions(dirs, repos []string, branchName string, num int, pick func(dir string, built []sliceguard.Contribution) []sliceguard.Contribution) []sliceguard.Contribution {
+	if num <= 1 {
+		return nil
+	}
+	var out []sliceguard.Contribution
+	eachCheckoutBranch(dirs, repos, func(i int, dir, base string) error {
+		built, err := sliceguard.Contributions(dir, base, branchName, num)
+		if err != nil {
+			return err
+		}
+		for _, c := range pick(dir, built) {
+			c.File = prefixRepo(repos, i, c.File)
+			out = append(out, c)
+		}
+		return nil
+	})
+	return out
+}
+
+// eachCheckoutBranch calls read once per repository checkout with the
+// checkout's index, its path and the ref of origin's default branch, which
+// the slice analyses take as their base. A checkout whose default branch
+// cannot be determined, or whose branch read fails, is skipped with a
+// warning: the analysis never stops a run.
+func eachCheckoutBranch(dirs, repos []string, read func(i int, dir, base string) error) {
+	for i, dir := range dirs {
+		base := git.OriginDefaultBranch(dir)
+		if base == "" {
+			slog.Warn("slice contributions: cannot determine origin's default branch, skipping", "repo", repos[i])
+			continue
+		}
+		if err := read(i, dir, "origin/"+base); err != nil {
+			slog.Warn("slice contributions: cannot read the branch, skipping", "repo", repos[i], "err", err)
+		}
+	}
+}
+
+// prefixRepo returns file under the name of repository i when the build
+// spans more than one repository, matching the layout of the session's
+// working directory, and unchanged otherwise.
+func prefixRepo(repos []string, i int, file string) string {
+	if len(repos) > 1 {
+		return repos[i] + "/" + file
+	}
+	return file
 }

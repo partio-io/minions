@@ -160,7 +160,7 @@ func latestOriginBase(repoPath string) (string, error) {
 		return "", fmt.Errorf("no origin remote: %w", err)
 	}
 
-	branch := originDefaultBranch(repoPath)
+	branch := git.OriginDefaultBranch(repoPath)
 	if branch == "" {
 		return "", fmt.Errorf("could not determine origin default branch")
 	}
@@ -174,31 +174,6 @@ func latestOriginBase(repoPath string) (string, error) {
 		return "", fmt.Errorf("resolving %s: %w", ref, err)
 	}
 	return ref, nil
-}
-
-// originDefaultBranch returns the short name of origin's default branch (e.g.
-// "main"), or "" if it cannot be determined. It prefers the locally recorded
-// origin/HEAD symref and falls back to rediscovering it from the remote.
-func originDefaultBranch(repoPath string) string {
-	read := func() string {
-		out, err := git.ExecGitDir(repoPath, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
-		if err != nil {
-			return ""
-		}
-		return strings.TrimPrefix(strings.TrimSpace(out), "origin/")
-	}
-
-	if b := read(); b != "" {
-		return b
-	}
-	// origin/HEAD is not recorded locally (common on shallow CI clones); ask the
-	// remote to (re)discover it, then re-read.
-	if _, err := git.ExecGitDir(repoPath, "remote", "set-head", "origin", "--auto"); err == nil {
-		if b := read(); b != "" {
-			return b
-		}
-	}
-	return ""
 }
 
 // Cleanup removes a worktree created by Create.

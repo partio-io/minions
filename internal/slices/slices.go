@@ -151,3 +151,27 @@ func Parse(body string) (*Plan, error) {
 	}
 	return plan, nil
 }
+
+// NamedAfter reports whether any slice after num names ident in its plan
+// text. The plan is prose from the research minion, so the text of a slice
+// is its whole section of the comment, from its heading to the next slice
+// heading, not only the fields Parse extracts: a mention under a subsection
+// Parse ignores still counts. The match is on the identifier as a whole
+// word, so Parse does not match ParseReport. A nil plan names nothing.
+func (p *Plan) NamedAfter(num int, ident string) bool {
+	if p == nil {
+		return false
+	}
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(ident) + `\b`)
+	cur := 0
+	for _, line := range strings.Split(p.Raw, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if m := sliceHeadingRe.FindStringSubmatch(line); m != nil {
+			cur, _ = strconv.Atoi(m[1])
+		}
+		if cur > num && re.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}

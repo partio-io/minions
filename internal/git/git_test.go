@@ -191,16 +191,17 @@ func TestFetchBranch_ErrorsWhenBranchMissing(t *testing.T) {
 	}
 }
 
-func TestListCommitSubjects(t *testing.T) {
+func TestListCommitSubjectsRange(t *testing.T) {
 	repo := initRepo(t)
+	gitT(t, repo, "checkout", "-q", "-b", "minion/task-1")
 	gitT(t, repo, "commit", "-q", "--allow-empty", "-m", "slice 1/2: work")
 	gitT(t, repo, "commit", "-q", "--allow-empty", "-m", "minion:slice 1/2")
 
-	subjects, err := ListCommitSubjects(repo, "main")
+	subjects, err := ListCommitSubjectsRange(repo, "main", "minion/task-1")
 	if err != nil {
-		t.Fatalf("ListCommitSubjects: %v", err)
+		t.Fatalf("ListCommitSubjectsRange: %v", err)
 	}
-	want := []string{"minion:slice 1/2", "slice 1/2: work", "initial"}
+	want := []string{"minion:slice 1/2", "slice 1/2: work"}
 	if len(subjects) != len(want) {
 		t.Fatalf("subjects = %v; want %v", subjects, want)
 	}
@@ -211,10 +212,161 @@ func TestListCommitSubjects(t *testing.T) {
 	}
 }
 
-func TestListCommitSubjects_ErrorsOnUnknownRef(t *testing.T) {
+// TestListCommitSubjectsRange_ExcludesBase is the regression guard. Markers
+// merged into the base stay reachable from the branch tip forever, so a count
+// taken from the tip grows without bound and eventually breaks every resume.
+func TestListCommitSubjectsRange_ExcludesBase(t *testing.T) {
 	repo := initRepo(t)
-	if _, err := ListCommitSubjects(repo, "origin/minion/absent"); err == nil {
-		t.Fatal("ListCommitSubjects: want error for unknown ref, got nil")
+	gitT(t, repo, "commit", "-q", "--allow-empty", "-m", "minion:slice 1/2")
+	gitT(t, repo, "commit", "-q", "--allow-empty", "-m", "minion:slice 2/2")
+	gitT(t, repo, "checkout", "-q", "-b", "minion/task-2")
+	gitT(t, repo, "commit", "-q", "--allow-empty", "-m", "minion:slice 1/3")
+
+	subjects, err := ListCommitSubjectsRange(repo, "main", "minion/task-2")
+	if err != nil {
+		t.Fatalf("ListCommitSubjectsRange: %v", err)
+	}
+	want := []string{"minion:slice 1/3"}
+	if len(subjects) != len(want) || subjects[0] != want[0] {
+		t.Errorf("subjects = %v; want %v (base markers must not be counted)", subjects, want)
+	}
+}
+
+func TestListCommitSubjectsRange_ErrorsOnUnknownRef(t *testing.T) {
+	repo := initRepo(t)
+	if _, err := ListCommitSubjectsRange(repo, "main", "origin/minion/absent"); err == nil {
+		t.Fatal("ListCommitSubjectsRange: want error for unknown ref, got nil")
+	}
+}
+
+// TestListCommitsRange covers the sibling of the subject listing: every
+// commit of the range, newest first, with the paths it changed. An empty
+// marker commit lists no path, and a commit base already has stays out.
+func TestListCommitsRange(t *testing.T) {
+	repo := initRepo(t)
+	gitT(t, repo, "commit", "-q", "--allow-empty", "-m", "minion:slice 2/2")
+	gitT(t, repo, "checkout", "-q", "-b", "minion/task-1")
+	if err := os.MkdirAll(filepath.Join(repo, "p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"p/x.go", "p/y.go"} {
+		if err := os.WriteFile(filepath.Join(repo, f), []byte("package p\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitT(t, repo, "add", "-A")
+	gitT(t, repo, "commit", "-q", "-m", "slice 1/2: work")
+	gitT(t, repo, "commit", "-q", "--allow-empty", "-m", "minion:slice 1/2")
+	gitT(t, repo, "rm", "-q", "a.txt")
+	gitT(t, repo, "commit", "-q", "-m", "slice 2/2: remove")
+
+	commits, err := ListCommitsRange(repo, "main", "minion/task-1")
+	if err != nil {
+		t.Fatalf("ListCommitsRange: %v", err)
+	}
+	want := []Commit{
+		{Subject: "slice 2/2: remove", Files: []string{"a.txt"}},
+		{Subject: "minion:slice 1/2"},
+		{Subject: "slice 1/2: work", Files: []string{"p/x.go", "p/y.go"}},
+	}
+	if len(commits) != len(want) {
+		t.Fatalf("commits = %+v; want %d commits", commits, len(want))
+	}
+	for i := range want {
+		got := commits[i]
+		if got.Subject != want[i].Subject {
+			t.Errorf("commits[%d].Subject = %q; want %q", i, got.Subject, want[i].Subject)
+		}
+		if len(got.Hash) != 40 {
+			t.Errorf("commits[%d].Hash = %q; want a full hash", i, got.Hash)
+		}
+		if strings.Join(got.Files, ",") != strings.Join(want[i].Files, ",") {
+			t.Errorf("commits[%d].Files = %v; want %v", i, got.Files, want[i].Files)
+		}
+	}
+}
+
+// TestListCommitsRange_NonASCIIPathIsVerbatim: git quotes non-ASCII paths by
+// default ("caf\303\251.go"); the listing turns that off so a caller can
+// pass the path back to git.
+func TestListCommitsRange_NonASCIIPathIsVerbatim(t *testing.T) {
+	repo := initRepo(t)
+	gitT(t, repo, "checkout", "-q", "-b", "minion/task-1")
+	if err := os.WriteFile(filepath.Join(repo, "café.go"), []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, repo, "add", "-A")
+	gitT(t, repo, "commit", "-q", "-m", "work")
+
+	commits, err := ListCommitsRange(repo, "main", "minion/task-1")
+	if err != nil {
+		t.Fatalf("ListCommitsRange: %v", err)
+	}
+	if len(commits) != 1 || strings.Join(commits[0].Files, ",") != "café.go" {
+		t.Errorf("commits = %+v; want one commit with file café.go", commits)
+	}
+}
+
+func TestListCommitsRange_EmptyRange(t *testing.T) {
+	repo := initRepo(t)
+	commits, err := ListCommitsRange(repo, "main", "main")
+	if err != nil {
+		t.Fatalf("ListCommitsRange: %v", err)
+	}
+	if len(commits) != 0 {
+		t.Errorf("commits = %+v; want none for an empty range", commits)
+	}
+}
+
+func TestListCommitsRange_ErrorsOnUnknownRef(t *testing.T) {
+	repo := initRepo(t)
+	if _, err := ListCommitsRange(repo, "main", "origin/minion/absent"); err == nil {
+		t.Fatal("ListCommitsRange: want error for unknown ref, got nil")
+	}
+}
+
+func TestListTreeFiles(t *testing.T) {
+	repo := initRepo(t)
+	if err := os.MkdirAll(filepath.Join(repo, "p", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"p/x.go", "p/sub/y.go"} {
+		if err := os.WriteFile(filepath.Join(repo, f), []byte("package p\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitT(t, repo, "add", "-A")
+	gitT(t, repo, "commit", "-q", "-m", "add p")
+
+	files, err := ListTreeFiles(repo, "main", "p")
+	if err != nil {
+		t.Fatalf("ListTreeFiles: %v", err)
+	}
+	// Direct children only: the subdirectory lists as itself, not its files.
+	if got := strings.Join(files, ","); got != "p/sub,p/x.go" {
+		t.Errorf("files = %v; want [p/sub p/x.go]", files)
+	}
+
+	absent, err := ListTreeFiles(repo, "main", "nope")
+	if err != nil {
+		t.Fatalf("ListTreeFiles on absent path: %v", err)
+	}
+	if len(absent) != 0 {
+		t.Errorf("files = %v; want none for an absent path", absent)
+	}
+}
+
+func TestOriginDefaultBranch(t *testing.T) {
+	repo, _ := cloneWithOrigin(t)
+	if got := OriginDefaultBranch(repo); got != "main" {
+		t.Errorf("OriginDefaultBranch = %q; want %q", got, "main")
+	}
+}
+
+func TestOriginDefaultBranch_EmptyWithoutOrigin(t *testing.T) {
+	repo := initRepo(t)
+	if got := OriginDefaultBranch(repo); got != "" {
+		t.Errorf("OriginDefaultBranch = %q; want %q for a repo without origin", got, "")
 	}
 }
 
