@@ -28,17 +28,17 @@ PRD stories 23, 24.
 
 ## Acceptance criteria
 
-- [ ] The `Chosen version` field above is filled before any edit.
-- [ ] Every workflow file in the cli repository that installs the
+- [x] The `Chosen version` field above is filled before any edit.
+- [x] Every workflow file in the cli repository that installs the
       minions runtime pins the chosen version.
-- [ ] No workflow file is left on the previous pin — verified by
+- [x] No workflow file is left on the previous pin — verified by
       searching the workflows directory for the old version string and
       finding no match.
-- [ ] The chosen version resolves: installing it succeeds, allowing for
+- [x] The chosen version resolves: installing it succeeds, allowing for
       a retry if the checksum database has not yet ingested the tag.
-- [ ] A pull request is opened against the cli repository with these
+- [x] A pull request is opened against the cli repository with these
       edits and nothing else.
-- [ ] The pull request is not merged.
+- [x] The pull request is not merged.
 
 ## Modules touched
 
