@@ -42,17 +42,17 @@ PRD story 23.
 
 ## Acceptance criteria
 
-- [ ] The default branch carries issues 01 to 05 and the full suite is
+- [x] The default branch carries issues 01 to 05 and the full suite is
       green on it.
-- [ ] A release notes draft exists and names the guard behavior in terms
+- [x] A release notes draft exists and names the guard behavior in terms
       an operator can check.
-- [ ] The notes state that this tag also carries the previously
+- [x] The notes state that this tag also carries the previously
       unreleased slice-marker counting fix.
-- [ ] The notes state the checksum-database lag and that a first failed
+- [x] The notes state the checksum-database lag and that a first failed
       install should be retried.
-- [ ] The next version number is stated explicitly.
-- [ ] Nothing is tagged, published or pushed by this slice.
-- [ ] The handoff block below is posted to the operator before this
+- [x] The next version number is stated explicitly.
+- [x] Nothing is tagged, published or pushed by this slice.
+- [x] The handoff block below is posted to the operator before this
       slice's row is flipped in `issues.md`.
 
 ## Modules touched
