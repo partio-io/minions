@@ -4,6 +4,7 @@ import (
 	"bytes"
 	gocontext "context"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +62,17 @@ func captureStdout(t *testing.T, fn func()) string {
 	_ = w.Close()
 	os.Stdout = old
 	return <-done
+}
+
+// captureLogs sends the default logger to a buffer, at every level, for
+// the rest of the test, and restores the logger when the test ends.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	return &buf
 }
 
 func sliceTestOpts(prog *program.Program, comments []slices.Comment) Opts {
@@ -279,9 +291,11 @@ func TestRunDryRun_SlicePlan_ListsEarlierContributions(t *testing.T) {
 // TestRunDryRun_SlicePlan_UnreadableRepoDoesNotStopRun: a workspace whose
 // repository cannot be read yields no contributions, and the run goes on.
 // Slice two still gets the section, so the prompt shape does not depend on
-// what the analysis found.
+// what the analysis found. The missing checkout is not the normal state of a
+// new task, so the run warns about it.
 func TestRunDryRun_SlicePlan_UnreadableRepoDoesNotStopRun(t *testing.T) {
 	comments := []slices.Comment{{Author: "jcleira", Body: testPlanComment}}
+	logs := captureLogs(t)
 
 	var runErr error
 	out := captureStdout(t, func() {
@@ -299,5 +313,77 @@ func TestRunDryRun_SlicePlan_UnreadableRepoDoesNotStopRun(t *testing.T) {
 	}
 	if !strings.Contains(blocks[1], "No package-level Go declarations from the earlier slices were found") {
 		t.Errorf("slice 2 prompt does not say that nothing was found:\n%s", blocks[1])
+	}
+	if !strings.Contains(logs.String(), "slice contributions: cannot determine origin's default branch") {
+		t.Errorf("a missing checkout did not warn:\n%s", logs.String())
+	}
+}
+
+// TestRunDryRun_SlicePlan_NewTaskLogsNoWarning: a dry run of a new task finds
+// a workspace clone without the run's branch, because no slice has run yet.
+// That is the normal case, so the run logs no warning about the branch, and
+// the prompt of slice two still says that the earlier slices built nothing.
+func TestRunDryRun_SlicePlan_NewTaskLogsNoWarning(t *testing.T) {
+	ws, _ := setupSliceWorkspace(t)
+	logs := captureLogs(t)
+
+	opts := sliceTestOpts(slicedProgram(), []slices.Comment{{Author: "jcleira", Body: testPlanComment}})
+	opts.WorkspaceRoot = ws
+
+	var runErr error
+	out := captureStdout(t, func() {
+		_, runErr = Run(gocontext.Background(), opts)
+	})
+	if runErr != nil {
+		t.Fatalf("Run returned error: %v", runErr)
+	}
+	blocks := strings.Split(out, "=== DRY RUN:")[1:]
+	if len(blocks) != 2 {
+		t.Fatalf("want 2 per-slice prompt blocks, got %d\noutput:\n%s", len(blocks), out)
+	}
+	if !strings.Contains(blocks[1], "No package-level Go declarations from the earlier slices were found") {
+		t.Errorf("slice 2 prompt does not say that nothing was found:\n%s", blocks[1])
+	}
+	if strings.Contains(logs.String(), "slice contributions:") {
+		t.Errorf("a dry run of a new task logged a branch warning:\n%s", logs.String())
+	}
+}
+
+// TestRunDryRun_SlicePlan_CheckoutWithoutBranchIsSkippedAlone: in a
+// multi-repo dry run, a checkout without the run's branch is left out on its
+// own. The checkout that holds the branch still lists its earlier
+// contributions under its repository prefix, as the live prompt does, and
+// nothing warns.
+func TestRunDryRun_SlicePlan_CheckoutWithoutBranchIsSkippedAlone(t *testing.T) {
+	ws, _ := setupSliceWorkspace(t)
+	seedEarlierSlice(t, ws, "report", "ParseReport")
+	web := filepath.Join(ws, "web")
+	liveGit(t, ws, "init", "-q", "-b", "main", web)
+	liveGit(t, web, "commit", "-q", "--allow-empty", "-m", "initial")
+	logs := captureLogs(t)
+
+	prog := slicedProgram()
+	prog.TargetRepos = []string{"api", "web"}
+	opts := sliceTestOpts(prog, []slices.Comment{{Author: "jcleira", Body: testPlanComment}})
+	opts.WorkspaceRoot = ws
+
+	var runErr error
+	out := captureStdout(t, func() {
+		_, runErr = Run(gocontext.Background(), opts)
+	})
+	if runErr != nil {
+		t.Fatalf("Run returned error: %v", runErr)
+	}
+	blocks := strings.Split(out, "=== DRY RUN:")[1:]
+	if len(blocks) != 2 {
+		t.Fatalf("want 2 per-slice prompt blocks, got %d\noutput:\n%s", len(blocks), out)
+	}
+	for _, want := range []string{"ParseReport", "api/report/report.go", "slice 1"} {
+		if !strings.Contains(blocks[1], want) {
+			t.Errorf("slice 2 prompt: missing %q in already-built section:\n%s", want, blocks[1])
+		}
+	}
+	if strings.Contains(logs.String(), "slice contributions:") {
+		t.Errorf("a checkout without the branch logged a warning:\n%s", logs.String())
 	}
 }
