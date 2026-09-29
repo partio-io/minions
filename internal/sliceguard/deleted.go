@@ -33,6 +33,11 @@ type Deletion struct {
 // the earlier slice added, because that path no longer exists. A file the
 // tree cannot stat for a reason other than absence is not reported: the
 // guard errs toward silence.
+//
+// The guard judges only a repository whose language it can analyze. When
+// the tree the earlier slices left holds no Go source, Deleted reports
+// nothing, so a non-Go repository behaves as it did before the guard, as the
+// declaration check already makes it.
 func Deleted(dir, base, ref string, num int) ([]Deletion, error) {
 	commits, err := git.ListCommitsRange(dir, base, ref)
 	if err != nil {
@@ -43,13 +48,18 @@ func Deleted(dir, base, ref string, num int) ([]Deletion, error) {
 		return nil, err
 	}
 	addedBy := map[string]int{}
+	var lastEnd string
 	for _, sp := range partition(commits, fork) {
 		if sp.slice >= num {
 			break
 		}
+		lastEnd = sp.end
 		for _, file := range addedFiles(dir, sp.start, sp.end) {
 			addedBy[file] = sp.slice
 		}
+	}
+	if len(addedBy) == 0 || !holdsGoSource(dir, lastEnd) {
+		return nil, nil
 	}
 	var out []Deletion
 	for file, slice := range addedBy {
@@ -82,4 +92,22 @@ func addedFiles(dir, start, end string) []string {
 		return nil
 	}
 	return strings.Split(out, "\n")
+}
+
+// holdsGoSource reports whether the tree at rev holds a Go source file that
+// the guard reads. A repository whose tree holds none is one whose language
+// the guard cannot analyze. A tree git cannot list counts as holding none,
+// so the guard stays silent.
+func holdsGoSource(dir, rev string) bool {
+	out, err := git.ExecGitDir(dir, "-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", rev)
+	if err != nil {
+		slog.Debug("sliceguard: cannot list the tree", "rev", rev, "err", err)
+		return false
+	}
+	for _, file := range strings.Split(out, "\n") {
+		if isSource(file) {
+			return true
+		}
+	}
+	return false
 }

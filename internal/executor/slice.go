@@ -445,7 +445,9 @@ func abandonedContributions(dirs, repos []string, branchName string, plan *slice
 
 // deletedFiles reports the files the earlier slices added that the working
 // tree of each checkout no longer holds, for the boundary guard of slice
-// num. Files are prefixed by repository name as in collectContributions.
+// num. Files are prefixed by repository name as in collectContributions. A
+// checkout without Go source yields nothing: the guard does not judge a
+// repository whose language it cannot analyze.
 func deletedFiles(dirs, repos []string, branchName string, num int) []sliceguard.Deletion {
 	if num <= 1 {
 		return nil
