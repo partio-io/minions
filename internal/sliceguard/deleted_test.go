@@ -214,3 +214,26 @@ func TestDeleted_LaterSliceRemovedFile(t *testing.T) {
 	})
 	assertDeleted(t, repo, 3, []Deletion{{File: "built/slice1.go", Slice: 1}})
 }
+
+// TestDeleted_RepoWithoutGoIsNotJudged: the guard cannot analyze a repository
+// that holds no Go source, so it does not judge it, as the PRD's language
+// guard requires. Slice one added a schema and the current slice removed it:
+// a repository without Go reports nothing, and the same deletion beside Go
+// source is reported.
+func TestDeleted_RepoWithoutGoIsNotJudged(t *testing.T) {
+	sliceOne := map[string]string{"assets/schema.sql": "create table t (id int);\n"}
+	steps := []step{{files: sliceOne}, {marker: 1}}
+
+	t.Run("a repository without Go source reports nothing", func(t *testing.T) {
+		repo := buildRepo(t, map[string]string{"README.md": "docs\n"}, 2, steps)
+		removeDisk(t, repo, "assets/schema.sql")
+		assertDeleted(t, repo, 2, nil)
+	})
+
+	t.Run("the same deletion in a Go repository is reported", func(t *testing.T) {
+		base := map[string]string{"go.mod": goMod, "main.go": "package main\n\nfunc main() {}\n"}
+		repo := buildRepo(t, base, 2, steps)
+		removeDisk(t, repo, "assets/schema.sql")
+		assertDeleted(t, repo, 2, []Deletion{{File: "assets/schema.sql", Slice: 1}})
+	})
+}

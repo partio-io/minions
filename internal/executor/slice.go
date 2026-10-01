@@ -42,9 +42,17 @@ func printSlicePrompts(opts Opts, prog *program.Program, agent *program.AgentDef
 	prdComment, _ := slices.FindPRDComment(opts.IssueComments)
 	repos := prog.EffectiveTargetRepos(agent)
 	branchName := "minion/" + taskID
-	dirs := make([]string, 0, len(repos))
-	for _, repo := range repos {
-		dirs = append(dirs, filepath.Join(opts.WorkspaceRoot, repo))
+	// A dry run of a new task finds each checkout without the run's branch: no
+	// slice has run yet, so there is nothing to read and nothing to warn
+	// about. Such a checkout gets an empty path, which keeps dirs aligned with
+	// repos for the multi-repo prefixes. A path that is not a checkout keeps
+	// its path, so its read fails and warns.
+	dirs := make([]string, len(repos))
+	for i, repo := range repos {
+		dir := filepath.Join(opts.WorkspaceRoot, repo)
+		if !lacksBranch(dir, branchName) {
+			dirs[i] = dir
+		}
 	}
 	for i := range plan.Slices {
 		built := earlierContributions(dirs, repos, branchName, i+1)
@@ -54,6 +62,17 @@ func printSlicePrompts(opts Opts, prog *program.Program, agent *program.AgentDef
 		fmt.Println(promptText)
 		fmt.Println("=== END AGENT PROMPT ===")
 	}
+}
+
+// lacksBranch reports whether dir is a repository checkout that does not
+// hold branch as a local branch. A path that is not a checkout reports false,
+// so the read that follows fails on it and warns.
+func lacksBranch(dir, branch string) bool {
+	if _, err := git.ExecGitDir(dir, "rev-parse", "--git-dir"); err != nil {
+		return false
+	}
+	_, err := git.ExecGitDir(dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	return err != nil
 }
 
 // runSliceLoop executes a slice-aware live run: one fresh Claude session per
@@ -426,7 +445,9 @@ func abandonedContributions(dirs, repos []string, branchName string, plan *slice
 
 // deletedFiles reports the files the earlier slices added that the working
 // tree of each checkout no longer holds, for the boundary guard of slice
-// num. Files are prefixed by repository name as in collectContributions.
+// num. Files are prefixed by repository name as in collectContributions. A
+// checkout without Go source yields nothing: the guard does not judge a
+// repository whose language it cannot analyze.
 func deletedFiles(dirs, repos []string, branchName string, num int) []sliceguard.Deletion {
 	if num <= 1 {
 		return nil
@@ -474,11 +495,15 @@ func collectContributions(dirs, repos []string, branchName string, num int, pick
 
 // eachCheckoutBranch calls read once per repository checkout with the
 // checkout's index, its path and the ref of origin's default branch, which
-// the slice analyses take as their base. A checkout whose default branch
-// cannot be determined, or whose branch read fails, is skipped with a
+// the slice analyses take as their base. An empty path marks a checkout with
+// nothing to read, which is skipped in silence. A checkout whose default
+// branch cannot be determined, or whose branch read fails, is skipped with a
 // warning: the analysis never stops a run.
 func eachCheckoutBranch(dirs, repos []string, read func(i int, dir, base string) error) {
 	for i, dir := range dirs {
+		if dir == "" {
+			continue
+		}
 		base := git.OriginDefaultBranch(dir)
 		if base == "" {
 			slog.Warn("slice contributions: cannot determine origin's default branch, skipping", "repo", repos[i])
