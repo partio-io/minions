@@ -14,20 +14,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/partio-io/minions/internal/slices"
 )
 
 // Abandoned reports the contributions that no Go source file in the working
-// tree at dir references any more, at the end of slice num of plan. The scan
-// reads the files on disk, not a commit, so a duplicate a session wrote but
-// did not commit is seen.
+// tree at dir references any more. The scan reads the files on disk, not a
+// commit, so a duplicate a session wrote but did not commit is seen.
 //
-// A contribution that a slice after num names in the plan is exempt: that
-// later slice is the one that will use it, so it is not abandoned yet. The
-// exemption lifts once no later slice names it, so the last slice still
-// catches a contribution nothing consumed. The guard asks the plan whether a
-// later slice names the identifier; it does not read the plan text itself.
+// A finding is a fact about the tree, not a verdict: before the last slice
+// of a run, a later slice may still be the one that calls the contribution.
+// The caller decides what a finding means for the slice it verifies.
 //
 // A reference is a use of the identifier outside its own declaration: in the
 // declaring package, a plain identifier; from another package, a selector on
@@ -45,7 +40,7 @@ import (
 // reports nothing at all: the build check fails on that file and tells the
 // fix session what to repair, and a finding here would send it after a
 // duplicate that may not exist. The guard errs toward silence.
-func Abandoned(dir string, built []Contribution, plan *slices.Plan, num int) []Contribution {
+func Abandoned(dir string, built []Contribution) []Contribution {
 	if len(built) == 0 {
 		return nil
 	}
@@ -57,9 +52,6 @@ func Abandoned(dir string, built []Contribution, plan *slices.Plan, num int) []C
 	for _, c := range built {
 		pkgDir := path.Dir(c.File)
 		if c.Identifier == "main" && refs.mainPkgs[pkgDir] {
-			continue
-		}
-		if plan.NamedAfter(num, c.Identifier) {
 			continue
 		}
 		if !refs.uses(pkgDir, c.Identifier) {
@@ -336,20 +328,24 @@ func (r references) packageName(importPath string) string {
 // FailureText is the check output for the guard's findings: the abandoned
 // contributions and the deleted files. It is the whole prompt context the
 // fix session gets, so it names each finding with its file and the slice
-// that added it, and states the one repair the guard accepts for each kind:
-// the current slice calls the earlier code and drops what it wrote instead,
-// or restores the file the earlier slice added and uses it. Deleting the
-// earlier code is the outcome the guard exists to prevent, and the text says
-// so. The text ends on its own line, and is empty without findings.
+// that added it, and states the repair the guard accepts for each kind. The
+// executor fails on an abandoned contribution only at the last slice, so the
+// text says that no later slice is left to use it, and the repair is to
+// call the earlier code where the run needs it, replacing any duplicate with
+// that call. A deleted file is restored and used. Deleting the earlier code
+// is the outcome the guard exists to prevent, and the text says so. The text
+// ends on its own line, and is empty without findings.
 func FailureText(abandoned []Contribution, deleted []Deletion) string {
 	var b strings.Builder
 	if len(abandoned) > 0 {
-		b.WriteString("Slice boundary guard: an earlier slice built code that nothing references any more.\n")
+		b.WriteString("Slice boundary guard: earlier slices of this run added declarations that no code outside tests uses, and no later slice is left to use them.\n")
 		for _, c := range abandoned {
 			fmt.Fprintf(&b, "- `%s` in %s, added by slice %d\n", c.Identifier, c.File, c.Slice)
 		}
-		b.WriteString("This slice wrote a duplicate of that work instead of using it. ")
-		b.WriteString("Repair: call the earlier code from this slice's code, and drop the duplicate this slice wrote. ")
+		b.WriteString("A use in a test does not count. ")
+		b.WriteString("Repair: call the earlier code from the code of this run that needs it. ")
+		b.WriteString("If a slice wrote a duplicate of that work, replace the duplicate with a call to the earlier code and drop the duplicate. ")
+		b.WriteString("If the caller is in another package and the declaration is unexported, add an exported wrapper beside the declaration and call the wrapper. ")
 		b.WriteString("Do not delete or rename the earlier code.\n")
 	}
 	if len(deleted) > 0 {

@@ -7,7 +7,6 @@ import (
 
 	"github.com/partio-io/minions/internal/program"
 	"github.com/partio-io/minions/internal/sliceguard"
-	"github.com/partio-io/minions/internal/slices"
 )
 
 // verifier reports whether the work an agent produced is acceptable. When it
@@ -61,31 +60,39 @@ func agentVerification(agent *program.AgentDef, worktreePaths []string) verifica
 
 // sliceVerification verifies one slice's worktrees with the deterministic
 // checks and the slice boundary guard, and labels the run with the slice
-// being built. worktreeRepos names the repository of each worktree,
+// being built. worktreeRepos names the repository of each worktree, and
 // branchName is the run's branch, which the guard reads for the earlier
-// slices' work, and plan is the slice plan, which the guard asks about the
-// later slices.
-func sliceVerification(agent *program.AgentDef, worktreePaths, worktreeRepos []string, branchName string, plan *slices.Plan, num, total int) verification {
+// slices' work. The guard fails on abandoned code only when num is the last
+// of total slices.
+func sliceVerification(agent *program.AgentDef, worktreePaths, worktreeRepos []string, branchName string, num, total int) verification {
 	return verification{
 		scope:     fmt.Sprintf("slice %d/%d", num, total),
 		debugBase: fmt.Sprintf("agent-%s-slice-%d", agent.Name, num),
 		logAttrs:  []any{"agent", agent.Name, "slice", num},
 		verifiers: []verifier{
 			checksVerifier(worktreePaths),
-			guardVerifier(worktreePaths, worktreeRepos, branchName, plan, num),
+			guardVerifier(worktreePaths, worktreeRepos, branchName, num, num == total),
 		},
 	}
 }
 
-// guardVerifier runs the slice boundary guard over the worktrees: it fails
-// when an earlier slice's contribution has no reference left in the working
-// tree, or when a file an earlier slice added is no longer in it, and its
-// failure text is what scopes the fix session. Slice one has no earlier
-// slice and always passes. A contribution a later slice of plan names is
-// not abandoned yet, and does not fail the run.
-func guardVerifier(worktreePaths, worktreeRepos []string, branchName string, plan *slices.Plan, num int) verifier {
+// guardVerifier runs the slice boundary guard over the worktrees, and its
+// failure text is what scopes the fix session. It fails at any slice when a
+// file an earlier slice added is no longer in the working tree. On the last
+// slice it also fails when an earlier slice's contribution has no reference
+// left in the working tree: no later slice is left to call it. Before the
+// last slice such a contribution only logs a warning, because a later slice
+// may be the one that calls it. Slice one has no earlier slice and always
+// passes.
+func guardVerifier(worktreePaths, worktreeRepos []string, branchName string, num int, last bool) verifier {
 	return func() (bool, string) {
-		abandoned := abandonedContributions(worktreePaths, worktreeRepos, branchName, plan, num)
+		abandoned := abandonedContributions(worktreePaths, worktreeRepos, branchName, num)
+		if !last {
+			for _, c := range abandoned {
+				slog.Warn("slice boundary guard: earlier contribution not used yet", "identifier", c.Identifier, "file", c.File, "added_by_slice", c.Slice, "slice", num)
+			}
+			abandoned = nil
+		}
 		deleted := deletedFiles(worktreePaths, worktreeRepos, branchName, num)
 		if len(abandoned) == 0 && len(deleted) == 0 {
 			return true, ""
