@@ -1047,6 +1047,130 @@ func TestRun_SliceLoop_GuardRepairFails_StopsChainWithEarlierSlicesPushed(t *tes
 	}
 }
 
+// testThreeSlicePlan is the plan shape of cli#55: slice 1 adds a helper,
+// slice 2 builds work that does not need it, and slice 3 is the slice that
+// calls it.
+const testThreeSlicePlan = `<!-- minion:research-slices parent=#42 -->
+
+## Proposed slices
+
+### Slice 1 — Helper
+
+Add the helper.
+
+#### Acceptance criteria
+
+- [ ] The helper exists
+
+### Slice 2 — Other work
+
+Build work that does not need the helper.
+
+#### Acceptance criteria
+
+- [ ] The other work exists
+
+### Slice 3 — Wire the helper
+
+Call the helper and the other work.
+
+#### Acceptance criteria
+
+- [ ] Both are called
+`
+
+// TestRun_SliceLoop_HelperForALaterSlice covers the plan shape of cli#55
+// through the live loop. Slice 1 adds a helper that only slice 3 calls, so
+// at the end of slice 2 nothing references it. Slice 2 passes without a fix
+// session, because a later slice is left. When slice 3 calls the helper, the
+// run reaches the PR. When slice 3 does not, the guard fails slice 3, the
+// last slice, and its fix session wires the helper in.
+func TestRun_SliceLoop_HelperForALaterSlice(t *testing.T) {
+	const wired = "package built\n\nfunc Slice3() { Slice1(); Slice2() }\n"
+	tests := []struct {
+		name       string
+		sliceThree string
+		wantFix    bool
+	}{
+		{name: "slice 3 calls the helper: no fix session", sliceThree: wired},
+		{name: "slice 3 does not call it: the last slice repairs", sliceThree: "package built\n\nfunc Slice3() { Slice2() }\n", wantFix: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws, origin := setupSliceWorkspace(t)
+			stubSeams(t)
+
+			var prompts []string
+			claudeRun = func(_ gocontext.Context, o claude.Opts) (*claude.Result, error) {
+				prompts = append(prompts, o.Prompt)
+				switch {
+				case strings.Contains(o.Prompt, "Build only this slice: Slice 1"):
+					writeBuilt(t, o.CWD, "slice1.go", "package built\n\nfunc Slice1() {}\n")
+				case strings.Contains(o.Prompt, "Build only this slice: Slice 2"):
+					writeBuilt(t, o.CWD, "slice2.go", "package built\n\nfunc Slice2() {}\n")
+				case strings.Contains(o.Prompt, "Build only this slice: Slice 3"):
+					writeBuilt(t, o.CWD, "slice3.go", tt.sliceThree)
+				case strings.Contains(o.Prompt, "Slice boundary guard"):
+					writeBuilt(t, o.CWD, "slice3.go", wired)
+				default:
+					return &claude.Result{ResultText: "TITLE: t\n\nDESCRIPTION:\nd"}, nil
+				}
+				return &claude.Result{}, nil
+			}
+			checksRun = func(string) (string, error) { return "", nil }
+			prCalled := 0
+			prCreateAndLinkAll = func(string, string, string, string, string, string, []string, pr.FullNameFunc, string, *pr.CreateOpts) ([]string, error) {
+				prCalled++
+				return []string{"https://github.com/acme/api/pull/7"}, nil
+			}
+
+			opts := liveSliceOpts(ws)
+			opts.IssueComments = []slices.Comment{
+				{Author: "jcleira", Body: testPRDComment},
+				{Author: "jcleira", Body: testThreeSlicePlan},
+			}
+			res, err := Run(gocontext.Background(), opts)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if ar := res.AgentResults[0]; ar.Error != nil {
+				t.Fatalf("agent error: %v", ar.Error)
+			}
+
+			// Sessions: three slice builds, the fix session when slice 3
+			// needs one, and the summary.
+			var fixes []int
+			for i, p := range prompts {
+				if strings.Contains(p, "Slice boundary guard") {
+					fixes = append(fixes, i)
+				}
+			}
+			if !tt.wantFix {
+				if len(prompts) != 4 || len(fixes) != 0 {
+					t.Fatalf("got %d sessions with fix sessions at %v; want 4 (three builds, summarize) and no fix session", len(prompts), fixes)
+				}
+			} else {
+				// The fix session follows the slice 3 build, not slice 2.
+				if len(prompts) != 5 || len(fixes) != 1 || fixes[0] != 3 {
+					t.Fatalf("got %d sessions with fix sessions at %v; want 5 with one fix session at index 3", len(prompts), fixes)
+				}
+				if !strings.Contains(prompts[3], "`Slice1`") {
+					t.Errorf("fix-it prompt does not name Slice1:\n%s", prompts[3])
+				}
+			}
+			originLog := liveGit(t, origin, "log", liveBranch, "--format=%s")
+			for _, marker := range []string{"minion:slice 1/3", "minion:slice 2/3", "minion:slice 3/3"} {
+				if !strings.Contains(originLog, marker) {
+					t.Errorf("origin branch missing marker %q:\n%s", marker, originLog)
+				}
+			}
+			if prCalled != 1 {
+				t.Errorf("PR creation called %d times; want 1", prCalled)
+			}
+		})
+	}
+}
+
 // TestRun_SliceLoop_GuardRestoresDeletedFile covers the guard's other half
 // through the live loop: slice 2 moves slice 1's declaration into its own
 // file and deletes slice 1's file. The declaration is still referenced, so
@@ -1250,7 +1374,7 @@ func TestAbandonedContributions(t *testing.T) {
 	t.Run("every worktree of a multi-repo build is scanned", func(t *testing.T) {
 		api := guardCheckout(t, "api", decl, duplicate)
 		web := guardCheckout(t, "web", decl, duplicate)
-		got := abandonedContributions([]string{api, web}, []string{"api", "web"}, liveBranch, nil, 2)
+		got := abandonedContributions([]string{api, web}, []string{"api", "web"}, liveBranch, 2)
 		want := []sliceguard.Contribution{
 			{Identifier: "Slice1", File: "api/built/slice1.go", Slice: 1},
 			{Identifier: "Slice1", File: "web/built/slice1.go", Slice: 1},
@@ -1262,7 +1386,7 @@ func TestAbandonedContributions(t *testing.T) {
 	t.Run("a consuming worktree beside an abandoning one", func(t *testing.T) {
 		api := guardCheckout(t, "api", decl, consumer)
 		web := guardCheckout(t, "web", decl, duplicate)
-		got := abandonedContributions([]string{api, web}, []string{"api", "web"}, liveBranch, nil, 2)
+		got := abandonedContributions([]string{api, web}, []string{"api", "web"}, liveBranch, 2)
 		want := []sliceguard.Contribution{{Identifier: "Slice1", File: "web/built/slice1.go", Slice: 1}}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Errorf("abandonedContributions = %+v; want %+v", got, want)
@@ -1270,7 +1394,7 @@ func TestAbandonedContributions(t *testing.T) {
 	})
 	t.Run("a single-repo build carries no prefix", func(t *testing.T) {
 		api := guardCheckout(t, "api", decl, duplicate)
-		got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, nil, 2)
+		got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, 2)
 		want := []sliceguard.Contribution{{Identifier: "Slice1", File: "built/slice1.go", Slice: 1}}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Errorf("abandonedContributions = %+v; want %+v", got, want)
@@ -1279,75 +1403,48 @@ func TestAbandonedContributions(t *testing.T) {
 	t.Run("a repository the guard cannot analyze yields nothing", func(t *testing.T) {
 		// Slice 1 wrote no Go, and slice 2 wrote a file that does not parse.
 		api := guardCheckout(t, "api", "", map[string]string{"built/slice2.go": "package built\n\nfunc (\n"})
-		if got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, nil, 2); len(got) != 0 {
+		if got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, 2); len(got) != 0 {
 			t.Errorf("abandonedContributions = %+v; want none", got)
 		}
 		// Slice 1's Go file does not parse either.
 		broken := guardCheckout(t, "api", "package built\n\nfunc (\n", duplicate)
-		if got := abandonedContributions([]string{broken}, []string{"api"}, liveBranch, nil, 2); len(got) != 0 {
+		if got := abandonedContributions([]string{broken}, []string{"api"}, liveBranch, 2); len(got) != 0 {
 			t.Errorf("abandonedContributions = %+v; want none", got)
 		}
 	})
 	t.Run("a checkout without an origin yields nothing", func(t *testing.T) {
 		dir := t.TempDir()
 		liveGit(t, dir, "init", "-q", "-b", "main")
-		if got := abandonedContributions([]string{dir}, []string{"api"}, liveBranch, nil, 2); len(got) != 0 {
+		if got := abandonedContributions([]string{dir}, []string{"api"}, liveBranch, 2); len(got) != 0 {
 			t.Errorf("abandonedContributions = %+v; want none", got)
 		}
 	})
 	t.Run("slice one is never checked", func(t *testing.T) {
 		api := guardCheckout(t, "api", decl, duplicate)
-		if got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, nil, 1); len(got) != 0 {
+		if got := abandonedContributions([]string{api}, []string{"api"}, liveBranch, 1); len(got) != 0 {
 			t.Errorf("abandonedContributions = %+v; want none for slice one", got)
 		}
 	})
 }
 
-// TestGuardVerifier_ExemptsLaterConsumer proves the exemption through the
-// verifier the slice loop runs: slice 1 added Slice1, slice 2 left it
-// unreferenced, and the plan's slice 3 names it, so the guard passes and no
-// fix session starts. The same tree under a plan whose later slices do not
-// name it fails with the finding.
-func TestGuardVerifier_ExemptsLaterConsumer(t *testing.T) {
+// TestGuardVerifier_FailsOnAbandonedOnlyOnLastSlice proves the timing rule
+// through the verifier the slice loop runs: slice 1 added Slice1, and slice
+// 2 left it unreferenced. Before the last slice the verifier passes, because
+// a later slice may be the one that calls Slice1. On the last slice no later
+// slice is left, so the verifier fails with the finding.
+func TestGuardVerifier_FailsOnAbandonedOnlyOnLastSlice(t *testing.T) {
 	const decl = "package built\n\nfunc Slice1() {}\n"
-	duplicate := map[string]string{"built/slice2.go": "package built\n\nfunc Slice2() {}\n"}
-	const planBody = `<!-- minion:research-slices -->
-
-### Slice 1 — Primitive
-
-#### Acceptance criteria
-
-- Slice1 exists
-
-### Slice 2 — Other work
-
-#### Acceptance criteria
-
-- Slice2 exists
-
-### Slice 3 — %s
-
-#### Acceptance criteria
-
-- The consumer is wired
-`
-	parse := func(sliceThree string) *slices.Plan {
-		plan, err := slices.Parse(fmt.Sprintf(planBody, sliceThree))
-		if err != nil {
-			t.Fatalf("Parse: %v", err)
-		}
-		return plan
-	}
-	t.Run("a later slice names it: the verifier passes", func(t *testing.T) {
-		api := guardCheckout(t, "api", decl, duplicate)
-		pass, out := guardVerifier([]string{api}, []string{"api"}, liveBranch, parse("Call Slice1 from Slice2"), 2)()
+	unused := map[string]string{"built/slice2.go": "package built\n\nfunc Slice2() {}\n"}
+	t.Run("before the last slice: the verifier passes", func(t *testing.T) {
+		api := guardCheckout(t, "api", decl, unused)
+		pass, out := guardVerifier([]string{api}, []string{"api"}, liveBranch, 2, false)()
 		if !pass || out != "" {
 			t.Errorf("guardVerifier = (%v, %q); want (true, \"\")", pass, out)
 		}
 	})
-	t.Run("no later slice names it: the verifier fails", func(t *testing.T) {
-		api := guardCheckout(t, "api", decl, duplicate)
-		pass, out := guardVerifier([]string{api}, []string{"api"}, liveBranch, parse("Unrelated work"), 2)()
+	t.Run("on the last slice: the verifier fails", func(t *testing.T) {
+		api := guardCheckout(t, "api", decl, unused)
+		pass, out := guardVerifier([]string{api}, []string{"api"}, liveBranch, 2, true)()
 		if pass || !strings.Contains(out, "`Slice1`") {
 			t.Errorf("guardVerifier = (%v, %q); want a failure naming Slice1", pass, out)
 		}
@@ -1358,9 +1455,9 @@ func TestGuardVerifier_ExemptsLaterConsumer(t *testing.T) {
 // through the verifier the slice loop runs: slice 1 added built/slice1.go,
 // and slice 2 moved its declaration into its own file and removed slice 1's
 // file. The declaration is still referenced, so abandonment alone is silent;
-// the deletion fails the verifier with the restore repair. With two
-// checkouts the file carries its repository prefix, as the fix session's
-// working directory lays it out.
+// the deletion fails the verifier with the restore repair, before the last
+// slice as on it. With two checkouts the file carries its repository prefix,
+// as the fix session's working directory lays it out.
 func TestGuardVerifier_FailsOnDeletedEarlierFile(t *testing.T) {
 	const decl = "package built\n\nfunc Slice1() {}\n"
 	moved := map[string]string{"built/slice2.go": "package built\n\nfunc Slice2() { Slice1() }\n\nfunc Slice1() {}\n"}
@@ -1369,7 +1466,7 @@ func TestGuardVerifier_FailsOnDeletedEarlierFile(t *testing.T) {
 		if err := os.Remove(filepath.Join(api, "built", "slice1.go")); err != nil {
 			t.Fatal(err)
 		}
-		pass, out := guardVerifier([]string{api}, []string{"api"}, liveBranch, nil, 2)()
+		pass, out := guardVerifier([]string{api}, []string{"api"}, liveBranch, 2, true)()
 		if pass {
 			t.Fatalf("guardVerifier = (true, %q); want a failure for the deleted file", out)
 		}
@@ -1382,13 +1479,23 @@ func TestGuardVerifier_FailsOnDeletedEarlierFile(t *testing.T) {
 			t.Errorf("guardVerifier reports Slice1 abandoned while slice 2 references it:\n%s", out)
 		}
 	})
+	t.Run("before the last slice", func(t *testing.T) {
+		api := guardCheckout(t, "api", decl, moved)
+		if err := os.Remove(filepath.Join(api, "built", "slice1.go")); err != nil {
+			t.Fatal(err)
+		}
+		pass, out := guardVerifier([]string{api}, []string{"api"}, liveBranch, 2, false)()
+		if pass || !strings.Contains(out, "built/slice1.go, added by slice 1") {
+			t.Errorf("guardVerifier = (%v, %q); want a failure naming built/slice1.go", pass, out)
+		}
+	})
 	t.Run("two checkouts prefix the repository", func(t *testing.T) {
 		api := guardCheckout(t, "api", decl, moved)
 		if err := os.Remove(filepath.Join(api, "built", "slice1.go")); err != nil {
 			t.Fatal(err)
 		}
 		web := guardCheckout(t, "web", decl, map[string]string{"built/slice2.go": "package built\n\nfunc Slice2() { Slice1() }\n"})
-		pass, out := guardVerifier([]string{api, web}, []string{"api", "web"}, liveBranch, nil, 2)()
+		pass, out := guardVerifier([]string{api, web}, []string{"api", "web"}, liveBranch, 2, true)()
 		if pass || !strings.Contains(out, "api/built/slice1.go, added by slice 1") {
 			t.Errorf("guardVerifier = (%v, %q); want a failure naming api/built/slice1.go", pass, out)
 		}
