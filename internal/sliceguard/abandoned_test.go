@@ -304,6 +304,60 @@ func TestAbandoned(t *testing.T) {
 			want: []Contribution{{Identifier: "ParseReport", File: "tools/report/report.go", Slice: 1}},
 		},
 		{
+			// cli#55: slice one put a cache reset that only tests call in
+			// production code. The repair moves it into the package's test
+			// file, and the guard accepts the move.
+			name: "a test-only helper moved into its package's test file",
+			base: map[string]string{"go.mod": goMod},
+			steps: []step{
+				{files: map[string]string{
+					"wsl/wsl.go":      "package wsl\n\nfunc resetCache() {}\n",
+					"wsl/wsl_test.go": "package wsl\n\nimport \"testing\"\n\nfunc TestIsWSL(t *testing.T) { resetCache() }\n",
+				}},
+				{marker: 1},
+			},
+			disk: map[string]string{
+				"wsl/wsl.go":      "package wsl\n",
+				"wsl/wsl_test.go": "package wsl\n\nimport \"testing\"\n\nfunc resetCache() {}\n\nfunc TestIsWSL(t *testing.T) { resetCache() }\n",
+			},
+			want: nil,
+		},
+		{
+			name: "removed from production and not moved into the tests",
+			base: map[string]string{"go.mod": goMod},
+			steps: []step{
+				{files: map[string]string{"wsl/wsl.go": "package wsl\n\nfunc resetCache() {}\n"}},
+				{marker: 1},
+			},
+			disk: map[string]string{
+				"wsl/wsl.go":      "package wsl\n",
+				"wsl/wsl_test.go": "package wsl\n\nimport \"testing\"\n\nfunc TestIsWSL(t *testing.T) {}\n",
+			},
+			want: []Contribution{{Identifier: "resetCache", File: "wsl/wsl.go", Slice: 1}},
+		},
+		{
+			name: "a test copy does not hide the production declaration",
+			base: map[string]string{"go.mod": goMod},
+			steps: []step{
+				{files: map[string]string{"report/report.go": "package report\n\nfunc ParseReport() {}\n"}},
+				{marker: 1},
+			},
+			disk: map[string]string{
+				"report/report_test.go": "package report_test\n\nfunc ParseReport() {}\n",
+			},
+			want: []Contribution{parseReport},
+		},
+		{
+			name: "an unparseable test file hides no finding",
+			base: map[string]string{"go.mod": goMod},
+			steps: []step{
+				{files: map[string]string{"report/report.go": "package report\n\nfunc ParseReport() {}\n"}},
+				{marker: 1},
+			},
+			disk: map[string]string{"report/report_test.go": "package report\n\nfunc {\n"},
+			want: []Contribution{parseReport},
+		},
+		{
 			name: "slice one has nothing to abandon",
 			base: map[string]string{"go.mod": goMod},
 			steps: []step{
@@ -329,7 +383,8 @@ func TestAbandoned(t *testing.T) {
 // TestFailureText: the text that scopes the fix session names each abandoned
 // identifier, its file and the slice that added it, and fixes the repair
 // direction: call the earlier code, drop any duplicate, export through a
-// wrapper when the caller is in another package, delete nothing. It does not
+// wrapper when the caller is in another package, move code that only tests
+// need into a test file, delete nothing else. It does not
 // claim that the current slice wrote a duplicate: on cli#55 that claim sent
 // the fix session after a duplicate that did not exist.
 func TestFailureText(t *testing.T) {
@@ -341,7 +396,8 @@ func TestFailureText(t *testing.T) {
 		"`ParseReport`", "report/report.go", "slice 1",
 		"`Render`", "api/report/render.go", "slice 2",
 		"no later slice is left", "A use in a test does not count",
-		"call the earlier code", "drop the duplicate", "exported wrapper", "Do not delete",
+		"call the earlier code", "drop the duplicate", "exported wrapper",
+		"exists only for tests", "`_test.go` file of the same package", "do not delete or rename",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("FailureText lacks %q:\n%s", want, text)
