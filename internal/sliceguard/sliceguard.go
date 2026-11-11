@@ -145,12 +145,26 @@ func isSource(file string) bool {
 	if !strings.HasSuffix(file, ".go") || strings.HasSuffix(file, "_test.go") {
 		return false
 	}
+	return !inSkippedDir(file)
+}
+
+// isTestSource reports whether file is a Go test file in a directory the
+// reference scan reads. The scan reads its declarations, never its uses: a
+// helper that only tests need may live there, but a call from a test is no
+// use of production code.
+func isTestSource(file string) bool {
+	return strings.HasSuffix(file, "_test.go") && !inSkippedDir(file)
+}
+
+// inSkippedDir reports whether file lies under a directory that skipDir
+// names.
+func inSkippedDir(file string) bool {
 	for _, seg := range strings.Split(path.Dir(file), "/") {
 		if seg != "." && skipDir(seg) {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // skipDir reports whether a directory holds no Go source the guard reads:
@@ -197,6 +211,12 @@ func declarations(dir, rev, file string) []string {
 		slog.Debug("sliceguard: skipping unparseable file", "file", file, "rev", rev, "err", err)
 		return nil
 	}
+	return declNames(f)
+}
+
+// declNames returns the package-level identifiers f declares, in source
+// order, with the same exclusions as declarations.
+func declNames(f *ast.File) []string {
 	var names []string
 	add := func(name string) {
 		if name != "init" && name != "_" {

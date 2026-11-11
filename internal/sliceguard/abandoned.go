@@ -32,6 +32,12 @@ import (
 // nothing constructs is abandoned. The main function of a main package is
 // never abandoned: the Go toolchain is its caller.
 //
+// A contribution that the working tree declares in a test file of its
+// package, and in no other file of that package, is not abandoned: a later
+// session moved a helper that only tests need, such as a cache reset, out of
+// production code into the tests. That move is the repair for test-only
+// code, and the scan accepts it.
+//
 // Imports resolve through every go.mod in the tree, so a nested module's
 // packages are found under the nested module's path. Without any go.mod,
 // cross-package references are matched on the suffix of the import path.
@@ -54,7 +60,7 @@ func Abandoned(dir string, built []Contribution) []Contribution {
 		if c.Identifier == "main" && refs.mainPkgs[pkgDir] {
 			continue
 		}
-		if !refs.uses(pkgDir, c.Identifier) {
+		if !refs.uses(pkgDir, c.Identifier) && !refs.movedToTests(pkgDir, c.Identifier) {
 			out = append(out, c)
 		}
 	}
@@ -70,6 +76,8 @@ type references struct {
 	used     map[string]map[string]bool // pkgDir -> identifier -> referenced
 	mainPkgs map[string]bool            // pkgDir -> declares package main
 	pkgNames map[string]string          // pkgDir -> package clause name
+	decls    map[string]map[string]bool // pkgDir -> identifier -> declared in a non-test file
+	testDecl map[string]map[string]bool // pkgDir -> identifier -> declared in a test file
 }
 
 // module is one go.mod in the tree: its module path and the directory,
@@ -88,6 +96,21 @@ type parsedFile struct {
 
 func (r references) uses(pkgDir, name string) bool {
 	return r.used[pkgDir][name]
+}
+
+// movedToTests reports whether the package at pkgDir declares name in a test
+// file and in no non-test file.
+func (r references) movedToTests(pkgDir, name string) bool {
+	return r.testDecl[pkgDir][name] && !r.decls[pkgDir][name]
+}
+
+func addDecls(set map[string]map[string]bool, pkgDir string, names []string) {
+	if set[pkgDir] == nil {
+		set[pkgDir] = map[string]bool{}
+	}
+	for _, n := range names {
+		set[pkgDir][n] = true
+	}
 }
 
 func (r references) mark(pkgDir, name string) {
@@ -125,11 +148,18 @@ func (r references) packageDir(importPath string) string {
 // through the package clause of the package it names, not through the last
 // segment of its path: the two differ for a directory such as go-report
 // that declares package report.
+//
+// It also records the package-level declarations of each package, those of
+// its test files apart, so that Abandoned can see a helper moved into the
+// tests. A test file adds no use, so one it cannot read or parse hides no
+// use and does not make the scan partial.
 func scanReferences(dir string) references {
 	refs := &references{
 		used:     map[string]map[string]bool{},
 		mainPkgs: map[string]bool{},
 		pkgNames: map[string]string{},
+		decls:    map[string]map[string]bool{},
+		testDecl: map[string]map[string]bool{},
 	}
 	var files []parsedFile
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
@@ -156,22 +186,30 @@ func scanReferences(dir string) references {
 			}
 			return nil
 		}
-		if !isSource(rel) {
+		test := isTestSource(rel)
+		if !test && !isSource(rel) {
 			return nil
 		}
 		src, readErr := os.ReadFile(p)
 		if readErr != nil {
 			slog.Debug("sliceguard: cannot read file", "file", rel, "err", readErr)
-			refs.partial = true
+			// A test file adds no use, so it hides none: it only cannot
+			// show a move, and the finding stays.
+			refs.partial = refs.partial || !test
 			return nil
 		}
 		f, parseErr := parser.ParseFile(token.NewFileSet(), rel, src, parser.SkipObjectResolution)
 		if parseErr != nil {
 			slog.Debug("sliceguard: skipping unparseable file", "file", rel, "err", parseErr)
-			refs.partial = true
+			refs.partial = refs.partial || !test
 			return nil
 		}
 		pkgDir := path.Dir(rel)
+		if test {
+			addDecls(refs.testDecl, pkgDir, declNames(f))
+			return nil
+		}
+		addDecls(refs.decls, pkgDir, declNames(f))
 		// A directory may also hold a build-ignored package main file, such
 		// as a generator. The importable package is the other one, so main
 		// names the directory only when no other package clause is seen.
@@ -332,9 +370,11 @@ func (r references) packageName(importPath string) string {
 // executor fails on an abandoned contribution only at the last slice, so the
 // text says that no later slice is left to use it, and the repair is to
 // call the earlier code where the run needs it, replacing any duplicate with
-// that call. A deleted file is restored and used. Deleting the earlier code
-// is the outcome the guard exists to prevent, and the text says so. The text
-// ends on its own line, and is empty without findings.
+// that call. Code that exists only for tests moves into a test file of its
+// package, which Abandoned accepts. A deleted file is restored and used.
+// Deleting the earlier code is the outcome the guard exists to prevent, and
+// the text says so. The text ends on its own line, and is empty without
+// findings.
 func FailureText(abandoned []Contribution, deleted []Deletion) string {
 	var b strings.Builder
 	if len(abandoned) > 0 {
@@ -346,7 +386,8 @@ func FailureText(abandoned []Contribution, deleted []Deletion) string {
 		b.WriteString("Repair: call the earlier code from the code of this run that needs it. ")
 		b.WriteString("If a slice wrote a duplicate of that work, replace the duplicate with a call to the earlier code and drop the duplicate. ")
 		b.WriteString("If the caller is in another package and the declaration is unexported, add an exported wrapper beside the declaration and call the wrapper. ")
-		b.WriteString("Do not delete or rename the earlier code.\n")
+		b.WriteString("If the earlier code exists only for tests, such as a cache reset or a test override, move it into a `_test.go` file of the same package. ")
+		b.WriteString("Apart from that move, do not delete or rename the earlier code.\n")
 	}
 	if len(deleted) > 0 {
 		b.WriteString("Slice boundary guard: an earlier slice added a file that the working tree no longer holds.\n")
